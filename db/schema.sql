@@ -1,0 +1,90 @@
+CREATE TABLE IF NOT EXISTS bart_stations (
+  id TEXT PRIMARY KEY,                    -- BART abbreviation, e.g., 'MONT', 'EMBR'
+  name TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lng REAL NOT NULL,
+  address TEXT,
+  city TEXT,
+  county TEXT,
+  line_colors TEXT,                       -- JSON array: ["yellow","blue","red"]
+  travel_time_to_montgomery INTEGER,      -- minutes
+  fare_to_montgomery INTEGER,             -- in cents to avoid float issues
+  monthly_commute_cost INTEGER            -- in cents, fare * 0.9375 * 2 * 22
+);
+
+CREATE TABLE IF NOT EXISTS apartments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  address TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lng REAL NOT NULL,
+  website_url TEXT NOT NULL,
+  phone TEXT,
+  nearest_station_id TEXT REFERENCES bart_stations(id),
+  walk_min_to_bart INTEGER,
+  has_in_unit_wd INTEGER DEFAULT 0,       -- SQLite boolean (0/1)
+  has_dishwasher INTEGER DEFAULT 0,
+  has_parking INTEGER DEFAULT 0,
+  parking_type TEXT,                       -- 'garage', 'surface', 'street'
+  has_gym INTEGER DEFAULT 0,
+  has_pool INTEGER DEFAULT 0,
+  pet_friendly INTEGER DEFAULT 0,
+  year_built INTEGER,
+  amenities_json TEXT,                    -- JSON for less-common amenities
+  scrape_status TEXT DEFAULT 'pending',   -- 'pending', 'active', 'stale', 'broken'
+  last_scraped_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS floor_plans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  apartment_id INTEGER NOT NULL REFERENCES apartments(id) ON DELETE CASCADE,
+  name TEXT,
+  bedrooms INTEGER NOT NULL,              -- 0 = studio
+  bathrooms REAL NOT NULL,
+  sqft_min INTEGER,
+  sqft_max INTEGER,
+  price_min INTEGER,                      -- monthly rent in dollars
+  price_max INTEGER,
+  available_units INTEGER DEFAULT 0,
+  floor_plan_url TEXT,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS price_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  floor_plan_id INTEGER NOT NULL REFERENCES floor_plans(id) ON DELETE CASCADE,
+  price_min INTEGER NOT NULL,
+  price_max INTEGER NOT NULL,
+  available_units INTEGER,
+  recorded_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_price_history_plan_date ON price_history(floor_plan_id, recorded_at);
+
+CREATE TABLE IF NOT EXISTS crime_stats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  station_id TEXT NOT NULL REFERENCES bart_stations(id),
+  data_year INTEGER NOT NULL,
+  data_month INTEGER NOT NULL,
+  violent_crime_count INTEGER DEFAULT 0,
+  property_crime_count INTEGER DEFAULT 0,
+  vehicle_crime_count INTEGER DEFAULT 0,
+  total_incidents INTEGER DEFAULT 0,
+  safety_score REAL,
+  source TEXT,
+  fetched_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(station_id, data_year, data_month)
+);
+
+CREATE TABLE IF NOT EXISTS scrape_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  apartment_id INTEGER REFERENCES apartments(id),
+  status TEXT NOT NULL,                   -- 'success', 'error', 'timeout', 'captcha'
+  duration_ms INTEGER,
+  error_message TEXT,
+  pages_scraped INTEGER,
+  started_at TEXT DEFAULT (datetime('now')),
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_scrape_logs_apartment ON scrape_logs(apartment_id, started_at);
