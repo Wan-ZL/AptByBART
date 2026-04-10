@@ -454,7 +454,7 @@ export default function MapView() {
       <GeolocateControl position="top-right" />
 
       {/* Map style switcher */}
-      <div className="absolute bottom-6 left-2 z-10 bg-white rounded-lg shadow-md border border-gray-200 p-1 flex gap-1">
+      <div className="absolute bottom-6 right-2 z-10 bg-white rounded-lg shadow-md border border-gray-200 p-1 flex gap-1">
         {[
           { id: 'https://tiles.openfreemap.org/styles/positron', label: 'Clean' },
           { id: 'https://tiles.openfreemap.org/styles/liberty', label: 'Detailed' },
