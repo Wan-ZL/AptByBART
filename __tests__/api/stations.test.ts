@@ -148,6 +148,6 @@ describe('GET /api/stations', () => {
     });
 
     const response = await GET();
-    expect(response.headers.get('Cache-Control')).toContain('max-age=86400');
+    expect(response.headers.get('Cache-Control')).toContain('max-age=3600');
   });
 });

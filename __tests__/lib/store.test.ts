@@ -114,6 +114,34 @@ describe('Zustand store', () => {
       expect(viewport).toHaveProperty('longitude');
       expect(viewport).toHaveProperty('zoom');
     });
+
+    // Kill: viewport {} mutant and longitude negation mutant
+    it('has viewport with exactly 3 keys and negative longitude', () => {
+      const { viewport } = useAppStore.getState();
+      expect(Object.keys(viewport)).toHaveLength(3);
+      expect(viewport.latitude).toBe(37.7749);
+      expect(viewport.longitude).toBe(-122.2194);
+      expect(viewport.zoom).toBe(10);
+    });
+
+    // Kill: safetyOverlayVisible false → true mutant
+    it('has safetyOverlayVisible strictly false', () => {
+      expect(useAppStore.getState().safetyOverlayVisible).toStrictEqual(false);
+    });
+
+    // Kill: filteredApartments [] → ["Stryker was here"] mutant
+    it('has filteredApartments as empty array of correct type', () => {
+      const fa = useAppStore.getState().filteredApartments;
+      expect(fa).toEqual([]);
+      expect(fa).toHaveLength(0);
+    });
+
+    // Kill: stations [] → ["Stryker was here"] mutant
+    it('has stations as empty array of correct type', () => {
+      const s = useAppStore.getState().stations;
+      expect(s).toEqual([]);
+      expect(s).toHaveLength(0);
+    });
   });
 
   describe('data actions', () => {
@@ -663,5 +691,64 @@ describe('selectFilteredApartments', () => {
     useAppStore.getState().toggleBedroom(2);
     const result = selectFilteredApartments(useAppStore.getState());
     expect(result).toHaveLength(0);
+  });
+
+  // --- Mutation-killing tests for store.ts ---
+
+  // Kill: safety `> 1` → `>= 1` (line 52)
+  // When minSafetyScore=1, the guard should be FALSE (bypass safety filter).
+  // A station with safetyScore=0 should PASS when minSafetyScore=1.
+  it('safety filter at exactly 1 does not exclude station with safetyScore 0', () => {
+    useAppStore.setState({
+      stations: [makeStation({ id: 'ZERO', safetyScore: 0 })],
+      apartments: [makeApartment({ id: 1, nearestStationId: 'ZERO' })],
+    });
+    useAppStore.getState().setMinSafety(1);
+    const result = selectFilteredApartments(useAppStore.getState());
+    // minSafetyScore=1 means "no filter", so even safetyScore=0 should pass
+    expect(result).toHaveLength(1);
+  });
+
+  // Kill: safety `&& apt.nearestStationId` → `|| apt.nearestStationId`
+  // When minSafetyScore > 1 but apt has NO nearestStationId, should pass
+  it('safety filter skips apartments without nearestStationId even when score > 1', () => {
+    useAppStore.setState({
+      stations: [makeStation({ id: 'SAFE', safetyScore: 10 })],
+      apartments: [makeApartment({ id: 1, nearestStationId: null })],
+    });
+    useAppStore.getState().setMinSafety(9);
+    const result = selectFilteredApartments(useAppStore.getState());
+    expect(result).toHaveLength(1);
+  });
+
+  // Another test: safety `true` mutant on outer conditional (line 52: if (true))
+  // When minSafetyScore=1 and apt HAS a nearestStationId with safetyScore < 1,
+  // it should STILL pass because the guard `minSafetyScore > 1` is false
+  it('safety filter is completely bypassed when minSafetyScore=1 regardless of station safety', () => {
+    useAppStore.setState({
+      stations: [makeStation({ id: 'BAD', safetyScore: 0 })],
+      apartments: [
+        makeApartment({ id: 1, nearestStationId: 'BAD' }),
+        makeApartment({ id: 2, nearestStationId: 'BAD' }),
+      ],
+    });
+    useAppStore.getState().setMinSafety(1);
+    const result = selectFilteredApartments(useAppStore.getState());
+    // Both should pass since minSafetyScore=1 means no filtering
+    expect(result).toHaveLength(2);
+  });
+
+  // Kill: optional chaining removed on station?.safetyScore (line 54)
+  // This only matters when station is undefined (not found in stationMap)
+  // AND minSafetyScore > 1 AND apt has a nearestStationId
+  it('safety filter passes when station not found in stationMap', () => {
+    useAppStore.setState({
+      stations: [], // No stations in map
+      apartments: [makeApartment({ id: 1, nearestStationId: 'MISSING' })],
+    });
+    useAppStore.getState().setMinSafety(5);
+    const result = selectFilteredApartments(useAppStore.getState());
+    // Station not found → station is undefined → station?.safetyScore is undefined → skip filter
+    expect(result).toHaveLength(1);
   });
 });

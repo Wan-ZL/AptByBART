@@ -4,6 +4,7 @@ import { db } from '../db/client';
 import { scrapeRentCafe, ScrapedFloorPlan } from './scrapers/rentcafe';
 import { scrapeWithCheerio } from './scrapers/http-cheerio';
 import { scrapeWithPlaywright } from './scrapers/playwright-scraper';
+import { scrapeWithOpenAI } from './scrapers/openai-fallback';
 import { scrapeWithClaude } from './scrapers/claude-fallback';
 
 // Load .env.local manually (no dotenv dependency)
@@ -36,8 +37,15 @@ const tiers: { name: string; fn: ScraperFn }[] = [
   { name: 'rentcafe', fn: scrapeRentCafe },
   { name: 'cheerio', fn: scrapeWithCheerio },
   { name: 'playwright', fn: scrapeWithPlaywright },
+  { name: 'openai', fn: scrapeWithOpenAI },
   { name: 'claude', fn: scrapeWithClaude },
 ];
+
+// Sanitize a numeric value: replace Infinity, NaN, or undefined with null
+function finiteOrNull(val: number | null | undefined): number | null {
+  if (val == null || !Number.isFinite(val)) return null;
+  return val;
+}
 
 async function upsertFloorPlans(apartmentId: number, plans: ScrapedFloorPlan[]) {
   // Delete existing floor plans for this apartment, then insert fresh ones
@@ -47,33 +55,41 @@ async function upsertFloorPlans(apartmentId: number, plans: ScrapedFloorPlan[]) 
   });
 
   for (const plan of plans) {
+    const priceMin = finiteOrNull(plan.priceMin);
+    const priceMax = finiteOrNull(plan.priceMax);
+    const sqftMin = finiteOrNull(plan.sqftMin);
+    const sqftMax = finiteOrNull(plan.sqftMax);
+    const availableUnits = finiteOrNull(plan.availableUnits) ?? 0;
+    const bedrooms = finiteOrNull(plan.bedrooms) ?? 0;
+    const bathrooms = finiteOrNull(plan.bathrooms) ?? 1;
+
     const result = await db.execute({
       sql: `INSERT INTO floor_plans (apartment_id, name, bedrooms, bathrooms, sqft_min, sqft_max, price_min, price_max, available_units, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
       args: [
         apartmentId,
         plan.name,
-        plan.bedrooms,
-        plan.bathrooms,
-        plan.sqftMin,
-        plan.sqftMax,
-        plan.priceMin,
-        plan.priceMax,
-        plan.availableUnits,
+        bedrooms,
+        bathrooms,
+        sqftMin,
+        sqftMax,
+        priceMin,
+        priceMax,
+        availableUnits,
       ],
     });
 
     // Insert price history for this floor plan
     const floorPlanId = Number(result.lastInsertRowid);
-    if (plan.priceMin !== null || plan.priceMax !== null) {
+    if (priceMin !== null || priceMax !== null) {
       await db.execute({
         sql: `INSERT INTO price_history (floor_plan_id, price_min, price_max, available_units, recorded_at)
               VALUES (?, ?, ?, ?, datetime('now'))`,
         args: [
           floorPlanId,
-          plan.priceMin ?? 0,
-          plan.priceMax ?? plan.priceMin ?? 0,
-          plan.availableUnits,
+          priceMin ?? 0,
+          priceMax ?? priceMin ?? 0,
+          availableUnits,
         ],
       });
     }

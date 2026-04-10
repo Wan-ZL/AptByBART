@@ -4,11 +4,11 @@ import { ScrapedFloorPlan } from './rentcafe';
 export async function scrapeWithPlaywright(
   apartment: { id: number; websiteUrl: string }
 ): Promise<ScrapedFloorPlan[] | null> {
-  let context: BrowserContext | null = null;
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
 
   try {
-    const browser = await chromium.launch({ headless: true });
-    context = await browser.newContext({
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     });
@@ -64,8 +64,8 @@ export async function scrapeWithPlaywright(
   } catch {
     return null;
   } finally {
-    if (context) {
-      await context.close().catch(() => {});
+    if (browser) {
+      await browser.close().catch(() => {});
     }
   }
 }

@@ -19,44 +19,40 @@ try {
   // .env.local not found — rely on environment variables
 }
 
-// ---------- Station groupings by data source ----------
+// ---------- Station → City mapping (all stations, single source: CA DOJ) ----------
+// Using CA DOJ as the sole data source ensures all stations are compared
+// under the same statistical standard (UCR), same time period, same methodology.
+// Tradeoff: city-level granularity (all stations in the same city share one score).
 
-const SF_STATIONS = ['EMBR', 'MONT', 'POWL', 'CIVC', '16TH', '24TH', 'GLEN', 'BALB', 'DALY'];
-
-const OAKLAND_STATIONS = ['WOAK', '12TH', '19TH', 'LAKE', 'FTVL', 'COLS', 'MCAR', 'ROCK', 'ASHB', 'DBRK', 'NBRK'];
-
-// Station → city mapping for CA DOJ data
-const DOJ_STATION_CITY: Record<string, string> = {
-  COLM: 'Daly City',   // Colma is unincorporated, policed by Daly City — map to closest match
-  SSAN: 'South San Francisco',
-  SBRN: 'San Bruno',
-  MLBR: 'Millbrae',
-  SFIA: 'San Bruno',   // SFO airport is in unincorporated area, San Bruno is nearest city in DOJ data
-  PLZA: 'El Cerrito',
-  DELN: 'Richmond',
-  RICH: 'Richmond',
-  ORIN: 'Orinda',
-  LAFY: 'Lafayette',
-  WCRK: 'Walnut Creek',
-  PHIL: 'Pleasant Hill',
-  CONC: 'Concord',
-  NCON: 'Concord',
-  PITT: 'Pittsburg',
-  PCTR: 'Pittsburg',
-  ANTC: 'Antioch',
-  BAYF: 'San Leandro',
-  SANL: 'San Leandro',
-  HAYW: 'Hayward',
-  SHAY: 'Hayward',
-  UCTY: 'Union City',
-  FRMT: 'Fremont',
-  WARM: 'Fremont',
-  CAST: 'Castro Valley',  // unincorporated, use as-is — DOJ may have Alameda County
-  DUBL: 'Dublin',
-  WDUB: 'Dublin',
-  MLPT: 'Milpitas',
-  BERY: 'San Jose',
-  OAKL: 'Oakland',        // Oakland Airport
+const STATION_CITY: Record<string, string> = {
+  // San Francisco
+  EMBR: 'San Francisco', MONT: 'San Francisco', POWL: 'San Francisco',
+  CIVC: 'San Francisco', '16TH': 'San Francisco', '24TH': 'San Francisco',
+  GLEN: 'San Francisco', BALB: 'San Francisco',
+  // Daly City / Colma
+  DALY: 'Daly City', COLM: 'Daly City',
+  // Peninsula
+  SSAN: 'South San Francisco', SBRN: 'San Bruno', MLBR: 'Millbrae',
+  SFIA: 'San Bruno',
+  // East Bay - Oakland
+  WOAK: 'Oakland', '12TH': 'Oakland', '19TH': 'Oakland',
+  LAKE: 'Oakland', FTVL: 'Oakland', COLS: 'Oakland',
+  MCAR: 'Oakland', OAKL: 'Oakland',
+  // East Bay - Berkeley / North
+  ROCK: 'Oakland', ASHB: 'Berkeley', DBRK: 'Berkeley', NBRK: 'Berkeley',
+  PLZA: 'El Cerrito', DELN: 'Richmond', RICH: 'Richmond',
+  // East Bay - Contra Costa
+  ORIN: 'Orinda', LAFY: 'Lafayette', WCRK: 'Walnut Creek',
+  PHIL: 'Pleasant Hill', CONC: 'Concord', NCON: 'Concord',
+  PITT: 'Pittsburg', PCTR: 'Pittsburg', ANTC: 'Antioch',
+  // East Bay - Alameda South
+  BAYF: 'San Leandro', SANL: 'San Leandro',
+  HAYW: 'Hayward', SHAY: 'Hayward',
+  UCTY: 'Union City', FRMT: 'Fremont', WARM: 'Fremont',
+  CAST: 'Hayward', // Castro Valley is unincorporated Alameda County, Hayward closest
+  DUBL: 'Dublin', WDUB: 'Dublin',
+  // South Bay
+  MLPT: 'Milpitas', BERY: 'San Jose',
 };
 
 interface CrimeCounts {
@@ -65,107 +61,7 @@ interface CrimeCounts {
   vehicle: number;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-// ---------- Source 1: DataSF (San Francisco) ----------
-
-async function fetchSFCrime(stationId: string, lat: number, lng: number): Promise<CrimeCounts> {
-  const twelveMonthsAgo = new Date();
-  twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
-  const dateStr = twelveMonthsAgo.toISOString().split('T')[0];
-
-  const baseUrl = 'https://data.sfgov.org/resource/wg3w-h783.json';
-  const where = `incident_date > '${dateStr}' AND within_circle(point, ${lat}, ${lng}, 800)`;
-  const params = new URLSearchParams({
-    $where: where,
-    $select: 'incident_category, count(*) as cnt',
-    $group: 'incident_category',
-    $limit: '50000',
-  });
-
-  const violentCategories = new Set(['Assault', 'Robbery', 'Homicide', 'Rape']);
-  const propertyCategories = new Set(['Burglary', 'Larceny Theft', 'Arson', 'Vandalism']);
-  const vehicleCategories = new Set(['Motor Vehicle Theft']);
-
-  let violent = 0, property = 0, vehicle = 0;
-
-  try {
-    const res = await fetch(`${baseUrl}?${params}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data: Array<{ incident_category: string; cnt: string }> = await res.json();
-
-    for (const row of data) {
-      const cat = row.incident_category;
-      const count = parseInt(row.cnt, 10);
-      if (violentCategories.has(cat)) violent += count;
-      else if (propertyCategories.has(cat)) property += count;
-      else if (vehicleCategories.has(cat)) vehicle += count;
-    }
-
-    // Separate query for "Larceny - From Vehicle" subcategory (counted as vehicle crime)
-    const subParams = new URLSearchParams({
-      $where: `incident_date > '${dateStr}' AND within_circle(point, ${lat}, ${lng}, 800) AND incident_subcategory = 'Larceny - From Vehicle'`,
-      $select: 'count(*) as cnt',
-      $limit: '1',
-    });
-    const subRes = await fetch(`${baseUrl}?${subParams}`);
-    if (subRes.ok) {
-      const subData: Array<{ cnt: string }> = await subRes.json();
-      if (subData.length > 0) {
-        vehicle += parseInt(subData[0].cnt, 10);
-      }
-    }
-  } catch (e) {
-    console.warn(`  Warning: SF data fetch failed for ${stationId}:`, (e as Error).message);
-  }
-
-  return { violent, property, vehicle };
-}
-
-// ---------- Source 2: Oakland Open Data ----------
-
-async function fetchOaklandCrime(stationId: string, lat: number, lng: number): Promise<CrimeCounts> {
-  const twelveMonthsAgo = new Date();
-  twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
-  const dateStr = twelveMonthsAgo.toISOString().split('T')[0];
-
-  const baseUrl = 'https://data.oaklandca.gov/resource/ym6k-rx7a.json';
-  const where = `datetime > '${dateStr}' AND within_circle(location_1, ${lat}, ${lng}, 800)`;
-  const params = new URLSearchParams({
-    $where: where,
-    $select: 'crimetype, count(*) as cnt',
-    $group: 'crimetype',
-    $limit: '50000',
-  });
-
-  const violentTypes = new Set(['ASSAULT', 'ROBBERY']);
-  const propertyTypes = new Set(['BURGLARY', 'THEFT']);
-  const vehicleTypes = new Set(['BURG - AUTO', 'VEHICLE THEFT']);
-
-  let violent = 0, property = 0, vehicle = 0;
-
-  try {
-    const res = await fetch(`${baseUrl}?${params}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data: Array<{ crimetype: string; cnt: string }> = await res.json();
-
-    for (const row of data) {
-      const type = row.crimetype;
-      const count = parseInt(row.cnt, 10);
-      if (violentTypes.has(type)) violent += count;
-      else if (propertyTypes.has(type)) property += count;
-      else if (vehicleTypes.has(type)) vehicle += count;
-    }
-  } catch (e) {
-    console.warn(`  Warning: Oakland data fetch failed for ${stationId}:`, (e as Error).message);
-  }
-
-  return { violent, property, vehicle };
-}
-
-// ---------- Source 3: CA DOJ OpenJustice CSV ----------
+// ---------- Single Source: CA DOJ OpenJustice CSV ----------
 
 interface DojCityData {
   violent: number;
@@ -177,14 +73,10 @@ async function fetchDojData(): Promise<Map<string, DojCityData>> {
   const csvUrl = 'https://data-openjustice.doj.ca.gov/sites/default/files/dataset/2024-07/Crimes_and_Clearances_with_Arson-1985-2023.csv';
   const cityMap = new Map<string, DojCityData>();
 
-  // Cities we care about (lowercase for case-insensitive matching)
-  const targetCities = new Set([
-    'daly city', 'colma', 'south san francisco', 'san bruno', 'millbrae',
-    'richmond', 'el cerrito', 'orinda', 'lafayette', 'walnut creek',
-    'pleasant hill', 'concord', 'pittsburg', 'antioch',
-    'fremont', 'union city', 'hayward', 'castro valley', 'dublin',
-    'pleasanton', 'san leandro', 'milpitas', 'san jose', 'oakland',
-  ]);
+  // All cities we need (derived from STATION_CITY mapping)
+  const targetCities = new Set(
+    Object.values(STATION_CITY).map(c => c.toLowerCase())
+  );
 
   try {
     console.log('  Downloading CA DOJ CSV...');
@@ -312,44 +204,16 @@ async function main() {
 
   const allCounts = new Map<string, CrimeCounts>();
 
-  // --- SF stations ---
-  console.log('--- Fetching San Francisco crime data ---');
-  for (const stationId of SF_STATIONS) {
-    const station = stationMap.get(stationId);
-    if (!station) {
-      console.warn(`  Station ${stationId} not found in database, skipping`);
-      continue;
-    }
-    console.log(`  ${stationId}...`);
-    const counts = await fetchSFCrime(stationId, station.lat, station.lng);
-    allCounts.set(stationId, counts);
-    console.log(`    violent=${counts.violent} property=${counts.property} vehicle=${counts.vehicle}`);
-    await sleep(300);
-  }
-
-  // --- Oakland stations ---
-  console.log('\n--- Fetching Oakland crime data ---');
-  for (const stationId of OAKLAND_STATIONS) {
-    const station = stationMap.get(stationId);
-    if (!station) {
-      console.warn(`  Station ${stationId} not found in database, skipping`);
-      continue;
-    }
-    console.log(`  ${stationId}...`);
-    const counts = await fetchOaklandCrime(stationId, station.lat, station.lng);
-    allCounts.set(stationId, counts);
-    console.log(`    violent=${counts.violent} property=${counts.property} vehicle=${counts.vehicle}`);
-    await sleep(300);
-  }
-
-  // --- DOJ stations (all remaining) ---
-  console.log('\n--- Fetching CA DOJ data ---');
+  // --- Single source: CA DOJ for all stations ---
+  console.log('--- Fetching CA DOJ data (single source for all stations) ---');
   const dojData = await fetchDojData();
-  console.log(`  Found data for ${dojData.size} cities`);
+  console.log(`  Found data for ${dojData.size} cities\n`);
 
-  const dojStations = Object.keys(DOJ_STATION_CITY);
-  for (const stationId of dojStations) {
-    const cityName = DOJ_STATION_CITY[stationId];
+  for (const [stationId, cityName] of Object.entries(STATION_CITY)) {
+    if (!stationMap.has(stationId)) {
+      console.warn(`  Station ${stationId} not found in database, skipping`);
+      continue;
+    }
     const cityData = dojData.get(cityName.toLowerCase());
     if (cityData) {
       allCounts.set(stationId, {
@@ -386,10 +250,7 @@ async function main() {
     const safetyScore = Math.max(1, Math.min(10, 10 - (weighted / maxWeighted) * 10));
     const total = counts.violent + counts.property + counts.vehicle;
 
-    // Determine source
-    let source = 'ca_doj';
-    if (SF_STATIONS.includes(stationId)) source = 'datasf';
-    else if (OAKLAND_STATIONS.includes(stationId)) source = 'oakland_opendata';
+    const source = 'ca_doj';
 
     stmts.push({
       sql: `INSERT OR REPLACE INTO crime_stats
