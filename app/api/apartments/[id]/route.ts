@@ -63,7 +63,7 @@ export async function GET(
 
     // Fetch price history for last 90 days, grouped by floor_plan_id
     const floorPlanIds = fpResult.rows.map((fp) => fp.id);
-    const priceHistory: Record<string, Array<{ priceMin: number; priceMax: number; availableUnits: number | null; recordedAt: string }>> = {};
+    const priceHistory: Record<string, Array<{ priceMin: number; priceMax: number; availableUnits: number | null; date: string }>> = {};
 
     if (floorPlanIds.length > 0) {
       const placeholders = floorPlanIds.map(() => "?").join(",");
