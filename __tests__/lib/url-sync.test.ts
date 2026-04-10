@@ -597,23 +597,19 @@ describe('URL sync logic', () => {
     });
 
     // Kill: `bedrooms.length > 0` → `true` or `>= 0` (line 23)
-    // When beds param is present but all values are invalid (empty after filter)
-    it('does not set bedrooms when all bed values are invalid', () => {
-      setUrlSearch('?beds=abc,xyz');
-      renderHook(() => useUrlSync());
-      // After filter, bedrooms would be empty. With > 0, setBedrooms is NOT called.
-      // With true or >= 0, setBedrooms([]) would be called (setting bedrooms to empty).
-      // This is tricky since the default is already []. Let's preload some bedrooms.
-      resetStore();
+    // When beds param is present but all values are invalid (empty after filter),
+    // setBedrooms should NOT be called. We preload bedrooms AFTER reset so init
+    // runs with pre-existing bedrooms that the invalid URL param should not clear.
+    it('does not overwrite bedrooms when all bed values in URL are invalid', () => {
+      // First, set bedrooms before the hook mounts
       useAppStore.getState().setBedrooms([1, 2]);
       setUrlSearch('?beds=abc,xyz');
       renderHook(() => useUrlSync());
-      // If the guard works correctly, bedrooms should NOT be overwritten
-      // Actually, since we're re-rendering the hook, it calls initStoreFromUrl which
-      // processes beds. The bedrooms.length will be 0 after filtering NaN, so setBedrooms
-      // should NOT be called, preserving whatever was there. But our reset resets to [].
-      // With the mutant (true), setBedrooms([]) is called which is same as default...
-      // This mutant may be equivalent. Let's focus on other mutants.
+      // With > 0: filtered bedrooms is [], length is 0, guard is false → setBedrooms NOT called
+      // With true or >= 0: setBedrooms([]) called → clears bedrooms to empty
+      const bedrooms = useAppStore.getState().filters.bedrooms;
+      expect(bedrooms).toEqual([1, 2]);
+      expect(bedrooms).toHaveLength(2);
     });
 
     // Kill: `if (commute)` → `if (true)` (line 34)

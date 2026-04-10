@@ -280,12 +280,12 @@ describe('GET /api/apartments', () => {
       .mockResolvedValueOnce(emptyResult)
       .mockResolvedValueOnce({ ...emptyResult, rows: [] });
 
-    const request = makeRequest('bbox=37.7,-122.5,37.9,-122.2&limit=999');
+    const request = makeRequest('bbox=37.7,-122.5,37.9,-122.2&limit=9999');
     await GET(request);
 
     const dataCall = vi.mocked(db.execute).mock.calls[1][0] as { sql: string; args: (string | number)[] };
     const args = dataCall.args;
-    expect(args[args.length - 2]).toBe(200); // clamped
+    expect(args[args.length - 2]).toBe(2000); // clamped to max 2000
   });
 
   it('filters out NaN values from bedroom_types', async () => {

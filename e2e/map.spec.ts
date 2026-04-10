@@ -9,13 +9,12 @@ test.describe('Map', () => {
   });
 
   // MapLibre requires client-side JS to initialize canvas.
-  // Currently blocked by "Maximum update depth exceeded" crash in useUrlSync/viewport loop.
-  test.fixme('should render the map canvas', async ({ page }) => {
+  test('should render the map canvas', async ({ page }) => {
     await expect(page.locator('.maplibregl-canvas')).toBeVisible({ timeout: 15000 });
   });
 
   // NavigationControl requires MapLibre to be initialized.
-  test.fixme('should show map navigation controls', async ({ page }) => {
+  test('should show map navigation controls', async ({ page }) => {
     await expect(page.locator('.maplibregl-ctrl-zoom-in')).toBeVisible({ timeout: 15000 });
   });
 

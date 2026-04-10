@@ -207,7 +207,13 @@ export const useAppStore = create<AppState>()((set) => ({
     set((state) => ({ safetyOverlayVisible: !state.safetyOverlayVisible })),
   setSafetyRadius: (radius) => set({ safetyRadius: radius }),
 
-  setViewport: (vp) => set({ viewport: vp }),
+  setViewport: (vp) => set((state) => {
+    const curr = state.viewport;
+    if (curr.latitude === vp.latitude && curr.longitude === vp.longitude && curr.zoom === vp.zoom) {
+      return {};
+    }
+    return { viewport: vp };
+  }),
 }));
 
 // Selector for filtered apartments — use with useAppStore(selectFilteredApartments)

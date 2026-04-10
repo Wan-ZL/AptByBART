@@ -1,0 +1,14 @@
+services:
+  - type: cron
+    name: aptbybart-scraper
+    runtime: node
+    schedule: "0 10 * * *"  # 2 AM PT (10:00 UTC)
+    buildCommand: npm install
+    startCommand: npx tsx scripts/scrape.ts
+    repo: https://github.com/Wan-ZL/AptByBART
+    branch: main
+    envVars:
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false

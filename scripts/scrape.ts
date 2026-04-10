@@ -24,11 +24,31 @@ try {
   // .env.local not found — rely on environment variables
 }
 
+async function mapConcurrent<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<void>
+): Promise<void> {
+  let index = 0;
+  const total = items.length;
+
+  async function worker() {
+    while (index < total) {
+      const i = index++;
+      await fn(items[i], i);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, total) }, () => worker());
+  await Promise.all(workers);
+}
+
 interface Apartment {
   id: number;
   name: string;
   website_url: string;
   scrape_status: string;
+  last_successful_tier: string | null;
 }
 
 type ScraperFn = (apt: { id: number; websiteUrl: string }) => Promise<ScrapedFloorPlan[] | null>;
@@ -131,9 +151,16 @@ async function getConsecutiveFailures(apartmentId: number): Promise<number> {
 async function main() {
   console.log('=== AptByBART Scraper ===\n');
 
+  // Ensure last_successful_tier column exists
+  try {
+    await db.execute('ALTER TABLE apartments ADD COLUMN last_successful_tier TEXT');
+  } catch {
+    // Column already exists, ignore
+  }
+
   // Fetch apartments that are not broken
   const result = await db.execute(
-    "SELECT id, name, website_url, scrape_status FROM apartments WHERE scrape_status != 'broken'"
+    "SELECT id, name, website_url, scrape_status, last_successful_tier FROM apartments WHERE scrape_status != 'broken'"
   );
 
   const apartments = result.rows as unknown as Apartment[];
@@ -143,16 +170,26 @@ async function main() {
   let failed = 0;
   let broken = 0;
 
-  for (let i = 0; i < apartments.length; i++) {
-    const apt = apartments[i];
+  const CONCURRENCY = 5;
+
+  await mapConcurrent(apartments, CONCURRENCY, async (apt, i) => {
     console.log(`[${i + 1}/${apartments.length}] ${apt.name} (ID: ${apt.id})`);
 
     const startTime = Date.now();
     let plans: ScrapedFloorPlan[] | null = null;
     let usedTier: string | null = null;
 
+    // Build tier order: try last successful tier first, then all others
+    let orderedTiers = tiers;
+    if (apt.last_successful_tier) {
+      const lastTier = tiers.find(t => t.name === apt.last_successful_tier);
+      if (lastTier) {
+        orderedTiers = [lastTier, ...tiers.filter(t => t.name !== apt.last_successful_tier)];
+      }
+    }
+
     // Try tiers in order
-    for (const tier of tiers) {
+    for (const tier of orderedTiers) {
       try {
         console.log(`  Trying ${tier.name}...`);
         plans = await tier.fn({ id: apt.id, websiteUrl: apt.website_url });
@@ -174,8 +211,8 @@ async function main() {
       await upsertFloorPlans(apt.id, plans);
 
       await db.execute({
-        sql: `UPDATE apartments SET last_scraped_at = datetime('now'), scrape_status = 'active', updated_at = datetime('now') WHERE id = ?`,
-        args: [apt.id],
+        sql: `UPDATE apartments SET last_scraped_at = datetime('now'), scrape_status = 'active', last_successful_tier = ?, updated_at = datetime('now') WHERE id = ?`,
+        args: [usedTier, apt.id],
       });
 
       await logScrape(apt.id, 'success', durationMs);
@@ -196,7 +233,7 @@ async function main() {
         });
       }
     }
-  }
+  });
 
   console.log('\n=== Scrape Summary ===');
   console.log(`Succeeded: ${succeeded}`);
