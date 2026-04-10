@@ -46,9 +46,9 @@ export default function ApartmentPopup() {
     setLoading(true);
     setDetail(null);
     setError(false);
-    fetch(`/api/apartments/${id}`)
+    fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/api/apartments/${id}`)
       .then((res) => res.json())
-      .then((data) => setDetail(data))
+      .then((data) => setDetail(data.apartment))
       .catch(() => setError(true))
       .finally(() => setLoading(false));
   };

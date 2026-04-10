@@ -19,6 +19,7 @@ const MapView = dynamic(() => import('@/app/components/Map'), {
 export default function Home() {
   const setStations = useAppStore((s) => s.setStations);
   const setApartments = useAppStore((s) => s.setApartments);
+  const setCitySafety = useAppStore((s) => s.setCitySafety);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,8 +31,8 @@ export default function Home() {
     setError(null);
     try {
       const [stationsRes, apartmentsRes] = await Promise.all([
-        fetch('/api/stations'),
-        fetch('/api/apartments?bbox=-122.6,37.3,-121.7,38.1'),
+        fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/api/stations`, { cache: 'no-cache' }),
+        fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/api/apartments?bbox=37.3,-122.6,38.1,-121.7`, { cache: 'no-cache' }),
       ]);
       if (!stationsRes.ok || !apartmentsRes.ok) {
         throw new Error('Failed to fetch data');
@@ -42,12 +43,13 @@ export default function Home() {
       ]);
       setStations(stationsData.stations);
       setApartments(apartmentsData.apartments);
+      if (stationsData.citySafety) setCitySafety(stationsData.citySafety);
     } catch {
       setError('Failed to load BART data. Please try again.');
     } finally {
       setLoading(false);
     }
-  }, [setStations, setApartments]);
+  }, [setStations, setApartments, setCitySafety]);
 
   useEffect(() => {
     fetchData();
