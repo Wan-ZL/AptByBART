@@ -10,6 +10,13 @@ export interface BartStation {
   safetyScore: number | null;
 }
 
+export interface CitySafety {
+  city: string;
+  lat: number;
+  lng: number;
+  safetyScore: number | null;
+}
+
 export interface Apartment {
   id: number;
   name: string;
@@ -51,6 +58,7 @@ export interface PriceHistoryEntry {
   date: string;
   priceMin: number;
   priceMax: number;
+  availableUnits: number | null;
 }
 
 export interface CrimeMonth {

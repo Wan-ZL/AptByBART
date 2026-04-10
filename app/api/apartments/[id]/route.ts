@@ -84,7 +84,7 @@ export async function GET(
           priceMin: ph.price_min as number,
           priceMax: ph.price_max as number,
           availableUnits: ph.available_units as number | null,
-          recordedAt: ph.recorded_at as string,
+          date: ph.recorded_at as string,
         });
       }
     }
