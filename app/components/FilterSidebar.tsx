@@ -65,7 +65,7 @@ export default function FilterSidebar() {
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-medium text-gray-700">Price Range</span>
             <span className="text-xs text-gray-500">
-              {formatPriceShort(filters.priceRange[0])} – {formatPriceShort(filters.priceRange[1])}
+              {formatPriceShort(filters.priceRange[0])} – {filters.priceRange[1] >= 5000 ? 'No limit' : formatPriceShort(filters.priceRange[1])}
             </span>
           </div>
           <Slider.Root

@@ -23,9 +23,8 @@ function computeFilteredApartments(
 
   return apartments.filter((apt) => {
     if (apt.minPrice != null) {
-      if (apt.minPrice < filters.priceRange[0] || apt.minPrice > filters.priceRange[1]) {
-        return false;
-      }
+      if (apt.minPrice < filters.priceRange[0]) return false;
+      if (filters.priceRange[1] < 5000 && apt.minPrice > filters.priceRange[1]) return false;
     }
 
     if (filters.bedrooms.length > 0) {
@@ -77,6 +76,7 @@ interface AppState {
   selectedStationId: string | null;
 
   // Map
+  mapStyle: string;
   safetyOverlayVisible: boolean;
   safetyRadius: number; // meters
   viewport: { latitude: number; longitude: number; zoom: number };
@@ -103,6 +103,7 @@ interface AppState {
   selectStation: (id: string | null) => void;
 
   // Actions — map
+  setMapStyle: (style: string) => void;
   toggleSafetyOverlay: () => void;
   setSafetyRadius: (radius: number) => void;
   setViewport: (vp: { latitude: number; longitude: number; zoom: number }) => void;
@@ -125,6 +126,7 @@ export const useAppStore = create<AppState>()((set) => ({
   selectedStationId: null,
 
   // Map
+  mapStyle: 'https://tiles.openfreemap.org/styles/positron',
   safetyOverlayVisible: false,
   safetyRadius: 5000,
   viewport: { latitude: 37.7749, longitude: -122.2194, zoom: 10 },
@@ -200,6 +202,7 @@ export const useAppStore = create<AppState>()((set) => ({
   selectStation: (id) => set({ selectedStationId: id }),
 
   // Actions — map
+  setMapStyle: (style) => set({ mapStyle: style }),
   toggleSafetyOverlay: () =>
     set((state) => ({ safetyOverlayVisible: !state.safetyOverlayVisible })),
   setSafetyRadius: (radius) => set({ safetyRadius: radius }),

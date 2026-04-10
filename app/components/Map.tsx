@@ -107,23 +107,36 @@ function buildStationsGeoJSON(stations: BartStation[]): GeoJSON.FeatureCollectio
   };
 }
 
+function formatPrice(price: number): string {
+  return `$${Math.round(price).toLocaleString()}`;
+}
+
 function buildApartmentsGeoJSON(apartments: Apartment[]): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
-    features: apartments.map((a) => ({
-      type: 'Feature' as const,
-      properties: {
-        id: a.id,
-        name: a.name,
-        price: a.minPrice ?? 0,
-        priceLabel: a.minPrice
-          ? a.minPrice >= 1000
-            ? `$${(a.minPrice / 1000).toFixed(1)}K`
-            : `$${a.minPrice}`
-          : '',
-      },
-      geometry: { type: 'Point' as const, coordinates: [a.lng, a.lat] },
-    })),
+    features: apartments.map((a) => {
+      let priceLabel = '';
+      if (a.minPrice != null) {
+        if (a.maxPrice != null && a.maxPrice !== a.minPrice) {
+          priceLabel = `${formatPrice(a.minPrice)}–${formatPrice(a.maxPrice)}`;
+        } else {
+          priceLabel = formatPrice(a.minPrice);
+        }
+      } else {
+        priceLabel = 'N/A';
+      }
+      return {
+        type: 'Feature' as const,
+        properties: {
+          id: a.id,
+          name: a.name,
+          price: a.minPrice ?? 0,
+          maxPrice: a.maxPrice ?? 0,
+          priceLabel,
+        },
+        geometry: { type: 'Point' as const, coordinates: [a.lng, a.lat] },
+      };
+    }),
   };
 }
 
@@ -136,6 +149,8 @@ export default function MapView() {
   const setViewport = useAppStore((s) => s.setViewport);
   const selectApartment = useAppStore((s) => s.selectApartment);
   const selectStation = useAppStore((s) => s.selectStation);
+  const mapStyle = useAppStore((s) => s.mapStyle);
+  const setMapStyle = useAppStore((s) => s.setMapStyle);
 
   const bartLinesGeoJSON = useMemo(() => buildBartLinesGeoJSON(stations), [stations]);
   const stationsGeoJSON = useMemo(() => buildStationsGeoJSON(stations), [stations]);
@@ -230,7 +245,7 @@ export default function MapView() {
   return (
     <MapGL
       ref={mapRef}
-      mapStyle="https://tiles.openfreemap.org/styles/liberty"
+      mapStyle={mapStyle}
       longitude={viewport.longitude}
       latitude={viewport.latitude}
       zoom={viewport.zoom}
@@ -307,8 +322,9 @@ export default function MapView() {
         clusterMaxZoom={14}
         clusterRadius={50}
         clusterProperties={{
-          totalPrice: ['+', ['coalesce', ['get', 'price'], 0]],
-          count: ['+', 1],
+          clusterMinPrice: ['min', ['get', 'price']],
+          clusterMaxPrice: ['max', ['get', 'maxPrice']],
+          hasPrices: ['+', ['case', ['>', ['get', 'price'], 0], 1, 0]],
         }}
       >
         {/* Cluster circles */}
@@ -351,7 +367,45 @@ export default function MapView() {
             'text-font': ['Noto Sans Regular'],
           }}
           paint={{
-            'text-color': '#ffffff',
+            'text-color': '#1a1a1a',
+            'text-halo-color': '#ffffff',
+            'text-halo-width': 1,
+          }}
+        />
+
+        {/* Cluster price range label */}
+        <Layer
+          id="cluster-price"
+          type="symbol"
+          filter={['has', 'point_count']}
+          layout={{
+            'text-field': [
+              'case',
+              ['>', ['get', 'hasPrices'], 0],
+              [
+                'case',
+                ['==',
+                  ['round', ['get', 'clusterMinPrice']],
+                  ['round', ['get', 'clusterMaxPrice']]
+                ],
+                ['concat', '$', ['to-string', ['round', ['get', 'clusterMinPrice']]]],
+                ['concat',
+                  '$', ['to-string', ['round', ['get', 'clusterMinPrice']]], '–$',
+                  ['to-string', ['round', ['get', 'clusterMaxPrice']]]
+                ],
+              ],
+              '',
+            ],
+            'text-font': ['Noto Sans Regular'],
+            'text-size': 9,
+            'text-offset': [0, 1.2],
+            'text-anchor': 'top',
+            'text-allow-overlap': true,
+          }}
+          paint={{
+            'text-color': '#1a1a1a',
+            'text-halo-color': '#ffffff',
+            'text-halo-width': 1,
           }}
         />
 
@@ -361,9 +415,9 @@ export default function MapView() {
           type="circle"
           filter={['!', ['has', 'point_count']]}
           paint={{
-            'circle-radius': 5,
+            'circle-radius': 7,
             'circle-color': '#3B82F6',
-            'circle-stroke-width': 1.5,
+            'circle-stroke-width': 2,
             'circle-stroke-color': '#ffffff',
           }}
         />
@@ -382,11 +436,11 @@ export default function MapView() {
             'text-optional': true,
           }}
           paint={{
-            'text-color': '#1E40AF',
+            'text-color': '#6B7280',
             'text-halo-color': '#ffffff',
             'text-halo-width': 1,
           }}
-          minzoom={13}
+          minzoom={12}
         />
       </Source>
 
@@ -398,6 +452,27 @@ export default function MapView() {
 
       <NavigationControl position="top-right" />
       <GeolocateControl position="top-right" />
+
+      {/* Map style switcher */}
+      <div className="absolute bottom-6 left-2 z-10 bg-white rounded-lg shadow-md border border-gray-200 p-1 flex gap-1">
+        {[
+          { id: 'https://tiles.openfreemap.org/styles/positron', label: 'Clean' },
+          { id: 'https://tiles.openfreemap.org/styles/liberty', label: 'Detailed' },
+          { id: 'https://tiles.openfreemap.org/styles/bright', label: 'Bright' },
+        ].map((style) => (
+          <button
+            key={style.id}
+            onClick={() => setMapStyle(style.id)}
+            className={`px-2 py-1 text-xs rounded transition-colors ${
+              mapStyle === style.id
+                ? 'bg-blue-500 text-white'
+                : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            {style.label}
+          </button>
+        ))}
+      </div>
     </MapGL>
   );
 }

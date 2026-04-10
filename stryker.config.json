@@ -6,7 +6,7 @@
   ],
   "testRunner": "vitest",
   "reporters": ["clear-text", "progress"],
-  "concurrency": 2,
+  "concurrency": 8,
   "timeoutMS": 30000,
   "thresholds": {
     "high": 90,

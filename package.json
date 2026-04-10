@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "rm -rf .next && (lsof -ti:4000 && echo '⚠️  Port 4000 is in use. Run: kill -9 '$(lsof -ti:4000) && exit 1 || next dev -p 4000)",
+    "dev": "echo '\\n  → App: http://localhost:4000/aptbybart\\n' && next dev -p 4000",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
