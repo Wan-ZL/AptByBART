@@ -35,36 +35,66 @@ function safetyColor(score: number): string {
 }
 
 export default function SafetyOverlay() {
-  const stations = useAppStore((s) => s.stations);
+  const citySafety = useAppStore((s) => s.citySafety);
   const visible = useAppStore((s) => s.safetyOverlayVisible);
+  const radius = useAppStore((s) => s.safetyRadius);
 
-  const geojson = useMemo<GeoJSON.FeatureCollection>(() => {
-    const features = stations
-      .filter((s) => s.safetyScore != null)
-      .map((s) => {
-        const feature = createCirclePolygon(s.lng, s.lat, 800);
+  // Cities WITH data — filled circles
+  const filledGeoJSON = useMemo<GeoJSON.FeatureCollection>(() => {
+    const features = citySafety
+      .filter((c) => c.safetyScore != null && c.safetyScore > 0)
+      .map((c) => {
+        const feature = createCirclePolygon(c.lng, c.lat, radius);
         feature.properties = {
-          color: safetyColor(s.safetyScore!),
-          stationId: s.id,
+          color: safetyColor(c.safetyScore!),
+          city: c.city,
         };
         return feature;
       });
     return { type: 'FeatureCollection', features };
-  }, [stations]);
+  }, [citySafety, radius]);
+
+  // Cities WITHOUT data — outline-only circles
+  const outlineGeoJSON = useMemo<GeoJSON.FeatureCollection>(() => {
+    const features = citySafety
+      .filter((c) => c.safetyScore == null || c.safetyScore === 0)
+      .map((c) => {
+        const feature = createCirclePolygon(c.lng, c.lat, radius);
+        feature.properties = { city: c.city };
+        return feature;
+      });
+    return { type: 'FeatureCollection', features };
+  }, [citySafety, radius]);
 
   if (!visible) return null;
 
   return (
-    <Source id="safety-overlay" type="geojson" data={geojson}>
-      <Layer
-        id="safety-overlay-fill"
-        type="fill"
-        paint={{
-          'fill-color': ['get', 'color'],
-          'fill-opacity': 0.25,
-        }}
-      />
-    </Source>
+    <>
+      {/* Filled circles for cities with data */}
+      <Source id="safety-overlay" type="geojson" data={filledGeoJSON}>
+        <Layer
+          id="safety-overlay-fill"
+          type="fill"
+          paint={{
+            'fill-color': ['get', 'color'],
+            'fill-opacity': 0.35,
+          }}
+        />
+      </Source>
+
+      {/* Outline-only circles for cities without data */}
+      <Source id="safety-overlay-nodata" type="geojson" data={outlineGeoJSON}>
+        <Layer
+          id="safety-overlay-nodata-outline"
+          type="line"
+          paint={{
+            'line-color': '#9ca3af',
+            'line-width': 1.5,
+            'line-dasharray': [4, 3],
+          }}
+        />
+      </Source>
+    </>
   );
 }
 
@@ -88,6 +118,9 @@ export function SafetyToggleButton() {
 
 export function SafetyLegend() {
   const visible = useAppStore((s) => s.safetyOverlayVisible);
+  const radius = useAppStore((s) => s.safetyRadius);
+  const setRadius = useAppStore((s) => s.setSafetyRadius);
+
   if (!visible) return null;
 
   return (
@@ -98,6 +131,25 @@ export function SafetyLegend() {
         <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#eab308]" /> 6-8 Moderate</div>
         <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#f97316]" /> 4-6 Caution</div>
         <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#ef4444]" /> 1-4 Higher Risk</div>
+        <div className="flex items-center gap-2">
+          <span className="w-3 h-3 rounded-full border border-gray-400 border-dashed" />
+          No data
+        </div>
+      </div>
+      <div className="mt-2 pt-2 border-t border-gray-200">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-gray-600">Radius</span>
+          <span className="text-gray-500">{(radius / 1000).toFixed(1)} km</span>
+        </div>
+        <input
+          type="range"
+          min={1000}
+          max={15000}
+          step={500}
+          value={radius}
+          onChange={(e) => setRadius(Number(e.target.value))}
+          className="w-full h-1 bg-gray-300 rounded-full appearance-none cursor-pointer accent-blue-500"
+        />
       </div>
     </div>
   );

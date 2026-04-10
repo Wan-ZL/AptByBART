@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Apartment, BartStation, Filters } from "./types";
+import type { Apartment, BartStation, CitySafety, Filters } from "./types";
 
 const DEFAULT_FILTERS: Filters = {
   priceRange: [1000, 5000],
@@ -64,6 +64,7 @@ interface AppState {
   // Data
   stations: BartStation[];
   apartments: Apartment[];
+  citySafety: CitySafety[];
 
   // Derived
   filteredApartments: Apartment[];
@@ -77,11 +78,13 @@ interface AppState {
 
   // Map
   safetyOverlayVisible: boolean;
+  safetyRadius: number; // meters
   viewport: { latitude: number; longitude: number; zoom: number };
 
   // Actions — data
   setStations: (stations: BartStation[]) => void;
   setApartments: (apartments: Apartment[]) => void;
+  setCitySafety: (citySafety: CitySafety[]) => void;
 
   // Actions — filters
   setFilter: <K extends keyof Filters>(key: K, value: Filters[K]) => void;
@@ -101,6 +104,7 @@ interface AppState {
 
   // Actions — map
   toggleSafetyOverlay: () => void;
+  setSafetyRadius: (radius: number) => void;
   setViewport: (vp: { latitude: number; longitude: number; zoom: number }) => void;
 }
 
@@ -108,6 +112,7 @@ export const useAppStore = create<AppState>()((set) => ({
   // Data
   stations: [],
   apartments: [],
+  citySafety: [],
 
   // Derived
   filteredApartments: [],
@@ -121,6 +126,7 @@ export const useAppStore = create<AppState>()((set) => ({
 
   // Map
   safetyOverlayVisible: false,
+  safetyRadius: 5000,
   viewport: { latitude: 37.7749, longitude: -122.2194, zoom: 10 },
 
   // Actions — data
@@ -134,6 +140,7 @@ export const useAppStore = create<AppState>()((set) => ({
       apartments,
       filteredApartments: computeFilteredApartments(apartments, state.filters, state.stations),
     })),
+  setCitySafety: (citySafety) => set({ citySafety }),
 
   // Actions — filters
   setFilter: (key, value) =>
@@ -195,6 +202,7 @@ export const useAppStore = create<AppState>()((set) => ({
   // Actions — map
   toggleSafetyOverlay: () =>
     set((state) => ({ safetyOverlayVisible: !state.safetyOverlayVisible })),
+  setSafetyRadius: (radius) => set({ safetyRadius: radius }),
 
   setViewport: (vp) => set({ viewport: vp }),
 }));

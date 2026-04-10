@@ -36,25 +36,55 @@ const LINE_COLORS: Record<string, string> = {
   beige:  '#C2A878',
 };
 
+const LINE_SPACING = 6; // pixels between parallel lines
+
 function buildBartLinesGeoJSON(stations: BartStation[]): GeoJSON.FeatureCollection {
   const stationMap = new Map<string, BartStation>();
   for (const s of stations) {
     stationMap.set(s.id, s);
   }
 
+  // Build a map of segment -> set of line colors that use it
+  const segmentLines = new Map<string, Set<string>>();
+  for (const [color, stationIds] of Object.entries(BART_LINES)) {
+    for (let i = 0; i < stationIds.length - 1; i++) {
+      const a = stationIds[i];
+      const b = stationIds[i + 1];
+      const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+      if (!segmentLines.has(key)) segmentLines.set(key, new Set());
+      segmentLines.get(key)!.add(color);
+    }
+  }
+
   const features: GeoJSON.Feature[] = [];
 
   for (const [color, stationIds] of Object.entries(BART_LINES)) {
-    const coords: [number, number][] = [];
-    for (const id of stationIds) {
-      const s = stationMap.get(id);
-      if (s) coords.push([s.lng, s.lat]);
-    }
-    if (coords.length >= 2) {
+    for (let i = 0; i < stationIds.length - 1; i++) {
+      const aId = stationIds[i];
+      const bId = stationIds[i + 1];
+      const aStation = stationMap.get(aId);
+      const bStation = stationMap.get(bId);
+      if (!aStation || !bStation) continue;
+
+      const key = aId < bId ? `${aId}-${bId}` : `${bId}-${aId}`;
+      const sharingLines = Array.from(segmentLines.get(key)!).sort();
+      const totalLines = sharingLines.length;
+      const index = sharingLines.indexOf(color);
+      const offset = totalLines === 1 ? 0 : (index - (totalLines - 1) / 2) * LINE_SPACING;
+
       features.push({
         type: 'Feature',
-        properties: { color: LINE_COLORS[color] || '#888888' },
-        geometry: { type: 'LineString', coordinates: coords },
+        properties: {
+          color: LINE_COLORS[color] || '#888888',
+          offset,
+        },
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            [aStation.lng, aStation.lat],
+            [bStation.lng, bStation.lat],
+          ],
+        },
       });
     }
   }
@@ -184,6 +214,10 @@ export default function MapView() {
         if (id) selectApartment(id as number);
         return;
       }
+
+      // Clicked empty map space — dismiss any open popup
+      selectApartment(null);
+      selectStation(null);
     },
     [selectStation, selectApartment],
   );
@@ -208,13 +242,26 @@ export default function MapView() {
     >
       {/* BART lines */}
       <Source id="bart-lines" type="geojson" data={bartLinesGeoJSON}>
+        {/* White outline layer for visual separation between adjacent lines */}
+        <Layer
+          id="bart-lines-outline"
+          type="line"
+          paint={{
+            'line-color': '#ffffff',
+            'line-width': 6,
+            'line-opacity': 1,
+            'line-offset': ['get', 'offset'],
+          }}
+        />
+        {/* Colored line layer on top */}
         <Layer
           id="bart-lines-layer"
           type="line"
           paint={{
             'line-color': ['get', 'color'],
-            'line-width': 3,
-            'line-opacity': 0.8,
+            'line-width': 4,
+            'line-opacity': 1,
+            'line-offset': ['get', 'offset'],
           }}
         />
       </Source>
@@ -236,6 +283,7 @@ export default function MapView() {
           type="symbol"
           layout={{
             'text-field': ['get', 'name'],
+            'text-font': ['Noto Sans Regular'],
             'text-size': 11,
             'text-offset': [0, 1.5],
             'text-anchor': 'top',
@@ -259,7 +307,7 @@ export default function MapView() {
         clusterMaxZoom={14}
         clusterRadius={50}
         clusterProperties={{
-          totalPrice: ['+', ['get', 'price']],
+          totalPrice: ['+', ['coalesce', ['get', 'price'], 0]],
           count: ['+', 1],
         }}
       >
@@ -327,6 +375,7 @@ export default function MapView() {
           filter={['!', ['has', 'point_count']]}
           layout={{
             'text-field': ['get', 'priceLabel'],
+            'text-font': ['Noto Sans Regular'],
             'text-size': 10,
             'text-offset': [0, 1.4],
             'text-anchor': 'top',

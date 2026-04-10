@@ -86,7 +86,7 @@ export async function GET(request: NextRequest) {
       sql: `
         SELECT COUNT(DISTINCT a.id) as total
         FROM apartments a
-        INNER JOIN floor_plans fp ON fp.apartment_id = a.id
+        LEFT JOIN floor_plans fp ON fp.apartment_id = a.id
         LEFT JOIN bart_stations s ON s.id = a.nearest_station_id
         LEFT JOIN crime_stats latest_crime ON latest_crime.station_id = s.id
           AND latest_crime.id = (
@@ -122,13 +122,16 @@ export async function GET(request: NextRequest) {
           a.has_pool,
           a.pet_friendly,
           a.year_built,
+          a.scrape_status,
           MIN(fp.price_min) as min_price,
+          MAX(fp.price_max) as max_price,
+          GROUP_CONCAT(DISTINCT fp.bedrooms) as bedroom_types,
           s.name as station_name,
           s.travel_time_to_montgomery,
           s.fare_to_montgomery,
           latest_crime.safety_score
         FROM apartments a
-        INNER JOIN floor_plans fp ON fp.apartment_id = a.id
+        LEFT JOIN floor_plans fp ON fp.apartment_id = a.id
         LEFT JOIN bart_stations s ON s.id = a.nearest_station_id
         LEFT JOIN crime_stats latest_crime ON latest_crime.station_id = s.id
           AND latest_crime.id = (
@@ -163,7 +166,12 @@ export async function GET(request: NextRequest) {
       hasPool: !!row.has_pool,
       petFriendly: !!row.pet_friendly,
       yearBuilt: row.year_built,
-      minPrice: row.min_price,
+      scrapeStatus: row.scrape_status || 'pending',
+      minPrice: row.min_price ?? null,
+      maxPrice: row.max_price ?? null,
+      bedroomTypes: row.bedroom_types
+        ? (row.bedroom_types as string).split(',').map(Number).filter((n) => !isNaN(n))
+        : [],
       stationName: row.station_name,
       travelTimeMin: row.travel_time_to_montgomery,
       fareCents: row.fare_to_montgomery,

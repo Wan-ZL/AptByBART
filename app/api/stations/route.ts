@@ -37,12 +37,47 @@ export async function GET() {
       safetyScore: row.safety_score,
     }));
 
+    // City-level safety: one entry per city with centroid coordinates
+    const cityResult = await db.execute(`
+      SELECT
+        s.city,
+        AVG(s.lat) as lat,
+        AVG(s.lng) as lng,
+        cs.safety_score,
+        cs.violent_crime_count,
+        cs.property_crime_count,
+        cs.vehicle_crime_count
+      FROM bart_stations s
+      LEFT JOIN crime_stats cs ON cs.station_id = s.id
+        AND cs.id = (
+          SELECT id FROM crime_stats
+          WHERE station_id = s.id
+          ORDER BY data_year DESC, data_month DESC
+          LIMIT 1
+        )
+      WHERE s.city IS NOT NULL
+      GROUP BY s.city
+    `);
+
+    const citySafety = cityResult.rows.map((row) => {
+      const v = (row.violent_crime_count as number) || 0;
+      const p = (row.property_crime_count as number) || 0;
+      const ve = (row.vehicle_crime_count as number) || 0;
+      const hasData = v + p + ve > 0;
+      return {
+        city: row.city,
+        lat: row.lat,
+        lng: row.lng,
+        safetyScore: hasData ? row.safety_score : null,
+      };
+    });
+
     return NextResponse.json(
-      { stations },
+      { stations, citySafety },
       {
         headers: {
           "Cache-Control":
-            "public, max-age=86400, stale-while-revalidate=604800",
+            "public, max-age=3600, stale-while-revalidate=86400",
         },
       }
     );
