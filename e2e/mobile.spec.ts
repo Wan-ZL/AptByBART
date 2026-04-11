@@ -21,8 +21,7 @@ test.describe('Mobile Layout', () => {
   });
 
   // Requires client-side React to be functional (onClick handler opens slide-over).
-  // Currently blocked by "Maximum update depth exceeded" crash in useUrlSync/viewport loop.
-  test.fixme('should open filter modal on filter button click', async ({ page }) => {
+  test('should open filter modal on filter button click', async ({ page }) => {
     await page.getByRole('button', { name: 'Filters' }).click();
     await expect(page.getByText('Price Range', { exact: true }).first()).toBeVisible();
   });

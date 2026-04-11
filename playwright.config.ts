@@ -6,12 +6,12 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   use: {
-    baseURL: 'http://localhost:4000',
+    baseURL: 'http://localhost:4000/aptbybart',
     trace: 'on-first-retry',
   },
   webServer: {
     command: 'npm run dev',
-    url: 'http://localhost:4000',
+    url: 'http://localhost:4000/aptbybart',
     reuseExistingServer: !process.env.CI,
     timeout: 30000,
   },

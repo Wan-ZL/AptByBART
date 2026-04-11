@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS apartments (
   year_built INTEGER,
   amenities_json TEXT,                    -- JSON for less-common amenities
   scrape_status TEXT DEFAULT 'pending',   -- 'pending', 'active', 'stale', 'broken'
+  last_successful_tier TEXT,              -- 'rentcafe', 'cheerio', 'playwright', 'openai', 'claude'
   last_scraped_at TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))

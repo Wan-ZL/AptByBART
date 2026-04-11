@@ -20,8 +20,7 @@ test.describe('Page Load', () => {
   });
 
   // Requires client-side React to be functional (click handler + state update).
-  // Currently blocked by "Maximum update depth exceeded" crash in useUrlSync/viewport loop.
-  test.fixme('should dismiss onboarding and not show again', async ({ page }) => {
+  test('should dismiss onboarding and not show again', async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.removeItem('aptbybart-onboarding-dismissed');
     });
