@@ -201,8 +201,8 @@ export async function runIngestion(ingesters: CrimeIngester[]): Promise<void> {
     const parentScore = scores.get(parentId);
     const parentCounts = areaCountsMap.get(parentId);
     if (parentScore && parentCounts) {
-      scores.set(tractId, parentScore);
-      areaCountsMap.set(tractId, parentCounts);
+      scores.set(tractId, { ...parentScore });
+      areaCountsMap.set(tractId, { ...parentCounts });
       tractCount++;
     }
   }

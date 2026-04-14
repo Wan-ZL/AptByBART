@@ -139,7 +139,7 @@ export async function GET(req: NextRequest) {
 
       if (row.updated_at) {
         const rowDate = row.updated_at as string;
-        if (rowDate > lastUpdated || lastUpdated === new Date().toISOString()) {
+        if (rowDate > lastUpdated) {
           lastUpdated = rowDate;
         }
       }
