@@ -85,7 +85,7 @@ export async function scrapeWithAIPlaywright(
     const page = await context.newPage();
 
     // Block media for performance but keep images (AI needs to see the page)
-    await page.route('**/*', (route) => {
+    await page.route('**/*', (route: any) => {
       const type = route.request().resourceType();
       if (type === 'media') return route.abort();
       return route.continue();
