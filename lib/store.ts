@@ -1,5 +1,7 @@
 import { create } from "zustand";
-import type { Apartment, BartStation, CitySafety, Filters } from "./types";
+import type { Apartment, BartStation, CitySafety, Filters, SafetyArea } from "./types";
+import type { SafetyWeights, SafetyPreset } from "./crime-taxonomy";
+import { WEIGHT_PRESETS } from "./crime-taxonomy";
 
 const DEFAULT_FILTERS: Filters = {
   priceRange: [1000, 5000],
@@ -75,16 +77,22 @@ interface AppState {
   selectedApartmentId: number | null;
   selectedStationId: string | null;
 
+  // Safety v2
+  safetyWeights: SafetyWeights;
+  safetyPreset: SafetyPreset;
+  safetyAreas: SafetyArea[];
+  selectedSafetyAreaId: string | null;
+
   // Map
   mapStyle: string;
   safetyOverlayVisible: boolean;
-  safetyRadius: number; // meters
   viewport: { latitude: number; longitude: number; zoom: number };
 
   // Actions — data
   setStations: (stations: BartStation[]) => void;
   setApartments: (apartments: Apartment[]) => void;
   setCitySafety: (citySafety: CitySafety[]) => void;
+  setSafetyAreas: (areas: SafetyArea[]) => void;
 
   // Actions — filters
   setFilter: <K extends keyof Filters>(key: K, value: Filters[K]) => void;
@@ -98,6 +106,11 @@ interface AppState {
   setMinSafety: (score: number) => void;
   resetFilters: () => void;
 
+  // Actions — safety v2
+  setSafetyWeights: (weights: SafetyWeights) => void;
+  setSafetyPreset: (preset: SafetyPreset) => void;
+  selectSafetyArea: (id: string | null) => void;
+
   // Actions — selection
   selectApartment: (id: number | null) => void;
   selectStation: (id: string | null) => void;
@@ -105,7 +118,6 @@ interface AppState {
   // Actions — map
   setMapStyle: (style: string) => void;
   toggleSafetyOverlay: () => void;
-  setSafetyRadius: (radius: number) => void;
   setViewport: (vp: { latitude: number; longitude: number; zoom: number }) => void;
 }
 
@@ -121,6 +133,12 @@ export const useAppStore = create<AppState>()((set) => ({
   // Filters
   filters: DEFAULT_FILTERS,
 
+  // Safety v2
+  safetyWeights: WEIGHT_PRESETS.balanced,
+  safetyPreset: 'balanced' as SafetyPreset,
+  safetyAreas: [],
+  selectedSafetyAreaId: null,
+
   // Selection
   selectedApartmentId: null,
   selectedStationId: null,
@@ -128,7 +146,6 @@ export const useAppStore = create<AppState>()((set) => ({
   // Map
   mapStyle: 'https://tiles.openfreemap.org/styles/positron',
   safetyOverlayVisible: false,
-  safetyRadius: 5000,
   viewport: { latitude: 37.7749, longitude: -122.2194, zoom: 10 },
 
   // Actions — data
@@ -143,6 +160,7 @@ export const useAppStore = create<AppState>()((set) => ({
       filteredApartments: computeFilteredApartments(apartments, state.filters, state.stations),
     })),
   setCitySafety: (citySafety) => set({ citySafety }),
+  setSafetyAreas: (safetyAreas) => set({ safetyAreas }),
 
   // Actions — filters
   setFilter: (key, value) =>
@@ -197,6 +215,91 @@ export const useAppStore = create<AppState>()((set) => ({
       filteredApartments: computeFilteredApartments(state.apartments, DEFAULT_FILTERS, state.stations),
     })),
 
+  // Actions — safety v2
+  setSafetyWeights: (weights) =>
+    set((state) => {
+      const areas = state.safetyAreas.map((area) => {
+        const pop = area.population || 0;
+        const rate = pop > 0 ? {
+          violent: (area.counts.violent / pop) * 10000,
+          property: (area.counts.property / pop) * 10000,
+          vehicle: (area.counts.vehicle / pop) * 10000,
+          qualityOfLife: (area.counts.qualityOfLife / pop) * 10000,
+        } : { violent: 0, property: 0, vehicle: 0, qualityOfLife: 0 };
+
+        const w =
+          rate.violent * weights.violent +
+          rate.property * weights.property +
+          rate.vehicle * weights.vehicle +
+          rate.qualityOfLife * weights.qualityOfLife;
+        return { ...area, _weighted: w };
+      });
+      // Percentile-based scoring: rank by weighted value
+      const withWeights = areas.filter(a => a.population && a.population > 0);
+      const sorted = [...withWeights].sort((a, b) => a._weighted - b._weighted);
+      const n = sorted.length;
+      const rankMap = new Map<string, number>();
+      for (let i = 0; i < n; i++) {
+        const pos = n > 1 ? i / (n - 1) : 0;
+        rankMap.set(sorted[i].id, Math.round((10 - pos * 9) * 10) / 10);
+      }
+      const recomputed = areas.map(({ _weighted, ...area }) => ({
+        ...area,
+        score: (!area.population || area.population === 0)
+          ? 5.0
+          : (rankMap.get(area.id) ?? 5.0),
+      }));
+      return {
+        safetyWeights: weights,
+        safetyPreset: 'custom' as SafetyPreset,
+        safetyAreas: recomputed,
+      };
+    }),
+
+  setSafetyPreset: (preset) =>
+    set((state) => {
+      if (preset === 'custom') return { safetyPreset: preset };
+      const weights = WEIGHT_PRESETS[preset];
+      const areas = state.safetyAreas.map((area) => {
+        const pop = area.population || 0;
+        const rate = pop > 0 ? {
+          violent: (area.counts.violent / pop) * 10000,
+          property: (area.counts.property / pop) * 10000,
+          vehicle: (area.counts.vehicle / pop) * 10000,
+          qualityOfLife: (area.counts.qualityOfLife / pop) * 10000,
+        } : { violent: 0, property: 0, vehicle: 0, qualityOfLife: 0 };
+
+        const w =
+          rate.violent * weights.violent +
+          rate.property * weights.property +
+          rate.vehicle * weights.vehicle +
+          rate.qualityOfLife * weights.qualityOfLife;
+        return { ...area, _weighted: w };
+      });
+      // Percentile-based scoring: rank by weighted value
+      const withWeights = areas.filter(a => a.population && a.population > 0);
+      const sorted = [...withWeights].sort((a, b) => a._weighted - b._weighted);
+      const n = sorted.length;
+      const rankMap = new Map<string, number>();
+      for (let i = 0; i < n; i++) {
+        const pos = n > 1 ? i / (n - 1) : 0;
+        rankMap.set(sorted[i].id, Math.round((10 - pos * 9) * 10) / 10);
+      }
+      const recomputed = areas.map(({ _weighted, ...area }) => ({
+        ...area,
+        score: (!area.population || area.population === 0)
+          ? 5.0
+          : (rankMap.get(area.id) ?? 5.0),
+      }));
+      return {
+        safetyPreset: preset,
+        safetyWeights: weights,
+        safetyAreas: recomputed,
+      };
+    }),
+
+  selectSafetyArea: (id) => set({ selectedSafetyAreaId: id }),
+
   // Actions — selection
   selectApartment: (id) => set({ selectedApartmentId: id }),
   selectStation: (id) => set({ selectedStationId: id }),
@@ -205,8 +308,6 @@ export const useAppStore = create<AppState>()((set) => ({
   setMapStyle: (style) => set({ mapStyle: style }),
   toggleSafetyOverlay: () =>
     set((state) => ({ safetyOverlayVisible: !state.safetyOverlayVisible })),
-  setSafetyRadius: (radius) => set({ safetyRadius: radius }),
-
   setViewport: (vp) => set((state) => {
     const curr = state.viewport;
     if (curr.latitude === vp.latitude && curr.longitude === vp.longitude && curr.zoom === vp.zoom) {

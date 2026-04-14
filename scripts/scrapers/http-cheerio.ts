@@ -1,6 +1,65 @@
 import * as cheerio from 'cheerio';
 import { ScrapedFloorPlan } from './rentcafe';
 
+export interface ScrapedAmenities {
+  hasInUnitWd: boolean;
+  hasDishwasher: boolean;
+  hasParking: boolean;
+  hasGym: boolean;
+  hasPool: boolean;
+  petFriendly: boolean;
+}
+
+export function detectAmenities(html: string): ScrapedAmenities {
+  const text = html.toLowerCase();
+  return {
+    hasInUnitWd: /in[- ]?unit\s*(washer|w\/d|laundry)|washer\s*(and|&|\/)\s*dryer\s*in/i.test(text),
+    hasDishwasher: /dishwasher/i.test(text),
+    hasParking: /parking|garage/i.test(text),
+    hasGym: /\b(gym|fitness\s*(center|room)|exercise\s*room|work\s*out)\b/i.test(text),
+    hasPool: /\b(pool|swimming)\b/i.test(text),
+    petFriendly: /\b(pet[- ]?friendly|cats?\s*(allowed|welcome)|dogs?\s*(allowed|welcome)|pet\s*policy)\b/i.test(text),
+  };
+}
+
+export function validatePrices(plans: ScrapedFloorPlan[], html: string): ScrapedFloorPlan[] {
+  const priceMatches = html.match(/\$[\d,]+/g) || [];
+  const htmlPrices = new Set(
+    priceMatches
+      .map(p => parseInt(p.replace(/[$,]/g, '')))
+      .filter(n => n >= 500 && n <= 15000)
+  );
+
+  return plans.map(plan => {
+    if (plan.priceMin != null && !htmlPrices.has(plan.priceMin)) {
+      const close = Array.from(htmlPrices).some(p => Math.abs(p - plan.priceMin!) / p < 0.1);
+      if (!close) {
+        console.log(`  [cheerio] Price $${plan.priceMin} not found in HTML, removing`);
+        return { ...plan, priceMin: null, priceMax: null };
+      }
+    }
+    return plan;
+  });
+}
+
+export async function scrapeAmenitiesFromUrl(url: string): Promise<ScrapedAmenities | null> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    return detectAmenities(html);
+  } catch {
+    return null;
+  }
+}
+
 export async function scrapeWithCheerio(
   apartment: { id: number; websiteUrl: string }
 ): Promise<ScrapedFloorPlan[] | null> {
@@ -48,7 +107,7 @@ export async function scrapeWithCheerio(
     }
   });
 
-  if (plans.length > 0) return plans;
+  if (plans.length > 0) return validatePrices(plans, html);
 
   // Strategy 2: Common pricing element selectors
   const selectors = [
@@ -63,7 +122,7 @@ export async function scrapeWithCheerio(
       const plan = extractPlanFromText(text);
       if (plan) plans.push(plan);
     });
-    if (plans.length > 0) return plans;
+    if (plans.length > 0) return validatePrices(plans, html);
   }
 
   // Strategy 3: Table rows with bed/bath/sqft/price columns
@@ -100,7 +159,7 @@ export async function scrapeWithCheerio(
       });
   });
 
-  if (plans.length > 0) return plans;
+  if (plans.length > 0) return validatePrices(plans, html);
 
   // Strategy 4: Scan full page for pricing patterns
   const priceBlocks = $('[class*="price"], [class*="rent"], [class*="pricing"], [class*="floorplan"], [class*="floor-plan"]');
@@ -110,7 +169,7 @@ export async function scrapeWithCheerio(
     if (plan) plans.push(plan);
   });
 
-  return plans.length > 0 ? plans : null;
+  return plans.length > 0 ? validatePrices(plans, html) : null;
 }
 
 function extractPlanFromText(text: string): ScrapedFloorPlan | null {

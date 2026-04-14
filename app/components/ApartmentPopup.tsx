@@ -127,28 +127,55 @@ export default function ApartmentPopup() {
                 </tr>
               </thead>
               <tbody>
-                {detail.floorPlans.map((fp) => (
-                  <tr key={fp.id} className={`border-b border-gray-100${fp.availableUnits === 0 ? ' opacity-50' : ''}`}>
-                    <td className="py-1 pr-2 font-medium">
-                      {bedroomLabel(fp.bedrooms)}/{fp.bathrooms}ba
-                    </td>
-                    <td className="py-1 pr-2">
-                      {fp.sqftMin != null
-                        ? fp.sqftMax && fp.sqftMax !== fp.sqftMin
-                          ? `${fp.sqftMin}-${fp.sqftMax}`
-                          : `${fp.sqftMin}`
-                        : '—'}
-                    </td>
-                    <td className="py-1 pr-2">
-                      {fp.priceMin != null
-                        ? fp.priceMax && fp.priceMax !== fp.priceMin
-                          ? `$${fp.priceMin}-$${fp.priceMax}`
-                          : `$${fp.priceMin}`
-                        : '—'}
-                    </td>
-                    <td className="py-1">{fp.availableUnits === 0 ? 'Unavailable' : fp.availableUnits}</td>
-                  </tr>
-                ))}
+                {(() => {
+                  // Separate floor plans with prices from those without
+                  const withPrice = detail.floorPlans.filter(fp => fp.priceMin != null);
+                  const noPrice = detail.floorPlans.filter(fp => fp.priceMin == null);
+                  const rows: React.ReactNode[] = [];
+
+                  // Show floor plans with prices individually
+                  for (const fp of withPrice) {
+                    rows.push(
+                      <tr key={fp.id} className={`border-b border-gray-100${fp.availableUnits === 0 ? ' opacity-50' : ''}`}>
+                        <td className="py-1 pr-2 font-medium">
+                          {fp.name || `${bedroomLabel(fp.bedrooms)}/${fp.bathrooms}ba`}
+                        </td>
+                        <td className="py-1 pr-2">
+                          {fp.sqftMin != null
+                            ? fp.sqftMax && fp.sqftMax !== fp.sqftMin
+                              ? `${fp.sqftMin}-${fp.sqftMax}`
+                              : `${fp.sqftMin}`
+                            : '—'}
+                        </td>
+                        <td className="py-1 pr-2">
+                          {fp.priceMax && fp.priceMax !== fp.priceMin
+                            ? `$${fp.priceMin}-$${fp.priceMax}`
+                            : `$${fp.priceMin}`}
+                        </td>
+                        <td className="py-1">{fp.availableUnits === 0 ? 'Unavail' : fp.availableUnits ?? '—'}</td>
+                      </tr>
+                    );
+                  }
+
+                  // Collapse no-price floor plans into a single summary row
+                  if (noPrice.length > 0) {
+                    const types = new Map<string, number>();
+                    for (const fp of noPrice) {
+                      const key = `${bedroomLabel(fp.bedrooms)}/${fp.bathrooms}ba`;
+                      types.set(key, (types.get(key) || 0) + 1);
+                    }
+                    const summary = [...types.entries()].map(([t, n]) => n > 1 ? `${t} ×${n}` : t).join(', ');
+                    rows.push(
+                      <tr key="no-price-summary" className="border-b border-gray-100 text-gray-400 italic">
+                        <td className="py-1 pr-2" colSpan={4}>
+                          {summary} — price not available
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  return rows;
+                })()}
               </tbody>
             </table>
           </div>

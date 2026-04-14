@@ -2,10 +2,12 @@ import { chromium, type BrowserContext, type Page } from 'playwright';
 import { ScrapedFloorPlan } from './rentcafe';
 
 const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15',
 ];
 
 export async function scrapeWithPlaywright(
@@ -17,33 +19,76 @@ export async function scrapeWithPlaywright(
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({
       userAgent: USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
+      viewport: { width: 1920, height: 1080 },
+      locale: 'en-US',
+      timezoneId: 'America/Los_Angeles',
+      geolocation: { latitude: 37.7749, longitude: -122.4194 },
+      permissions: ['geolocation'],
     });
 
-    // Stealth: patch navigator.webdriver and other bot signals
+    // Comprehensive stealth: patch navigator, chrome runtime, WebGL, permissions
     await context.addInitScript(() => {
       // Hide webdriver flag
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 
-      // Add chrome object stub
-      (window as any).chrome = { runtime: {}, loadTimes: () => ({}), csi: () => ({}) };
+      // Chrome runtime
+      (window as any).chrome = {
+        runtime: { id: 'fake-extension-id', connect: () => {}, sendMessage: () => {} },
+        loadTimes: () => ({ commitLoadTime: Date.now() / 1000 }),
+        csi: () => ({ startE: Date.now(), onloadT: Date.now() }),
+      };
 
-      // Override plugins to look like a real browser
+      // Realistic plugins
       Object.defineProperty(navigator, 'plugins', {
-        get: () => [1, 2, 3, 4, 5],
+        get: () => {
+          const plugins = [
+            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+          ];
+          return Object.assign(plugins, { length: plugins.length, item: (i: number) => plugins[i], namedItem: (n: string) => plugins.find(p => p.name === n) || null, refresh: () => {} });
+        },
       });
 
-      // Override languages
-      Object.defineProperty(navigator, 'languages', {
-        get: () => ['en-US', 'en'],
-      });
+      // Languages
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+      Object.defineProperty(navigator, 'language', { get: () => 'en-US' });
+
+      // Platform
+      Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
+
+      // Hardware concurrency
+      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+
+      // Device memory
+      Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+      // Permissions
+      const originalQuery = window.navigator.permissions?.query?.bind(window.navigator.permissions);
+      if (originalQuery) {
+        (navigator.permissions as any).query = (params: any) => {
+          if (params.name === 'notifications') {
+            return Promise.resolve({ state: 'denied', onchange: null } as any);
+          }
+          return originalQuery(params);
+        };
+      }
+
+      // WebGL vendor/renderer (prevent bot detection via GPU fingerprint)
+      const getParameter = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function(param: number) {
+        if (param === 37445) return 'Intel Inc.';
+        if (param === 37446) return 'Intel Iris OpenGL Engine';
+        return getParameter.call(this, param);
+      };
     });
 
     const page = await context.newPage();
 
-    // Block images, fonts, css for performance
+    // Block images and media for performance (keep CSS/fonts to avoid bot detection)
     await page.route('**/*', (route) => {
       const type = route.request().resourceType();
-      if (['image', 'font', 'stylesheet', 'media'].includes(type)) {
+      if (['image', 'media'].includes(type)) {
         return route.abort();
       }
       return route.continue();
@@ -72,10 +117,40 @@ export async function scrapeWithPlaywright(
       }
     });
 
+    // Navigate with domcontentloaded (faster than networkidle, less likely to timeout)
     await page.goto(apartment.websiteUrl, {
-      waitUntil: 'networkidle',
+      waitUntil: 'domcontentloaded',
       timeout: 30_000,
     });
+
+    // Detect Cloudflare challenge and wait for it to resolve
+    const isCloudflare = await page.evaluate(() => {
+      return document.title.includes('Just a moment') ||
+             document.title.includes('Checking your browser') ||
+             document.querySelector('#challenge-running') !== null ||
+             document.querySelector('.cf-browser-verification') !== null;
+    });
+
+    if (isCloudflare) {
+      console.log(`  [Playwright] Cloudflare challenge detected, waiting...`);
+      try {
+        await page.waitForFunction(() => {
+          return !document.title.includes('Just a moment') &&
+                 !document.title.includes('Checking your browser');
+        }, { timeout: 15_000 });
+        // Wait for page to fully load after challenge resolves
+        await page.waitForTimeout(2000);
+      } catch {
+        console.log(`  [Playwright] Cloudflare challenge did not resolve`);
+        return null;
+      }
+    }
+
+    // Random delay 1-3 seconds to appear human
+    await page.waitForTimeout(1000 + Math.random() * 2000);
+
+    // Wait for dynamic content to render
+    await page.waitForTimeout(2000);
 
     // Try extracting from intercepted API responses first
     const plans = parseInterceptedData(interceptedData);

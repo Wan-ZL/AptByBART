@@ -59,13 +59,17 @@ export default function ApartmentCard({ apartment }: { apartment: Apartment }) {
     >
       <div className="font-semibold text-sm text-gray-900">{apartment.name}</div>
 
-      {(apartment.minPrice != null || apartment.maxPrice != null) && (
-        <div className="text-sm text-gray-700 mt-1">
-          {apartment.minPrice != null && apartment.maxPrice != null
-            ? `${formatPrice(apartment.minPrice)} - ${formatPrice(apartment.maxPrice)}`
-            : formatPrice((apartment.minPrice ?? apartment.maxPrice)!)}
-        </div>
-      )}
+      <div className="text-sm mt-1">
+        {apartment.minPrice != null || apartment.maxPrice != null ? (
+          <span className="text-gray-700">
+            {apartment.minPrice != null && apartment.maxPrice != null
+              ? `${formatPrice(apartment.minPrice)} - ${formatPrice(apartment.maxPrice)}`
+              : formatPrice((apartment.minPrice ?? apartment.maxPrice)!)}
+          </span>
+        ) : (
+          <span className="text-gray-400 text-sm">Price not available</span>
+        )}
+      </div>
 
       {apartment.bedroomTypes.length > 0 && (
         <div className="text-xs text-gray-500 mt-0.5">

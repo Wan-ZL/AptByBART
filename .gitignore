@@ -10,3 +10,22 @@ local.db
 next-env.d.ts
 test-results/
 *.db
+
+# Generated scraper data
+tier_results/
+scrape-*.log
+pipeline-*.log
+discover-*.log
+.crawl4ai-venv/
+.playwright-mcp/
+
+# Screenshots
+qa-*.png
+screenshot-*.png
+
+# OS files
+.DS_Store
+
+# Auth files
+auth
+auth-wal
