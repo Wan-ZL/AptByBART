@@ -89,3 +89,80 @@ CREATE TABLE IF NOT EXISTS scrape_logs (
   completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scrape_logs_apartment ON scrape_logs(apartment_id, started_at);
+
+-- Crime data sources registry
+CREATE TABLE IF NOT EXISTS crime_data_sources (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  api_type TEXT NOT NULL,
+  base_url TEXT,
+  granularity TEXT NOT NULL,
+  update_frequency TEXT,
+  last_fetched_at TEXT,
+  last_success_at TEXT,
+  record_count INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'active'
+);
+
+-- Geographic areas at multiple granularity levels
+CREATE TABLE IF NOT EXISTS geo_areas (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  area_type TEXT NOT NULL,
+  parent_area_id TEXT,
+  centroid_lat REAL,
+  centroid_lng REAL,
+  population INTEGER,
+  FOREIGN KEY (parent_area_id) REFERENCES geo_areas(id)
+);
+CREATE INDEX IF NOT EXISTS idx_geo_areas_type ON geo_areas(area_type);
+CREATE INDEX IF NOT EXISTS idx_geo_areas_parent ON geo_areas(parent_area_id);
+CREATE INDEX IF NOT EXISTS idx_geo_areas_parent_type ON geo_areas(parent_area_id, area_type);
+
+-- Raw crime observations from any source
+CREATE TABLE IF NOT EXISTS crime_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id TEXT NOT NULL REFERENCES crime_data_sources(id),
+  geo_area_id TEXT NOT NULL REFERENCES geo_areas(id),
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  category TEXT NOT NULL,
+  incident_count INTEGER NOT NULL DEFAULT 0,
+  raw_category TEXT,
+  fetched_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(source_id, geo_area_id, period_start, period_end, category)
+);
+CREATE INDEX IF NOT EXISTS idx_crime_obs_area ON crime_observations(geo_area_id, period_start);
+CREATE INDEX IF NOT EXISTS idx_crime_obs_source ON crime_observations(source_id, fetched_at);
+
+-- Computed safety scores per geo area
+CREATE TABLE IF NOT EXISTS safety_scores (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  geo_area_id TEXT NOT NULL REFERENCES geo_areas(id),
+  score REAL NOT NULL,
+  violent_count INTEGER DEFAULT 0,
+  property_count INTEGER DEFAULT 0,
+  vehicle_count INTEGER DEFAULT 0,
+  quality_of_life_count INTEGER DEFAULT 0,
+  total_incidents INTEGER DEFAULT 0,
+  sources_used TEXT,
+  percentile_rank INTEGER,
+  computed_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(geo_area_id)
+);
+CREATE INDEX IF NOT EXISTS idx_safety_scores_area ON safety_scores(geo_area_id);
+
+-- Apartment to geo area mapping (many-to-many)
+CREATE TABLE IF NOT EXISTS apartment_geo_areas (
+  apartment_id INTEGER NOT NULL REFERENCES apartments(id) ON DELETE CASCADE,
+  geo_area_id TEXT NOT NULL REFERENCES geo_areas(id),
+  PRIMARY KEY (apartment_id, geo_area_id)
+);
+CREATE INDEX IF NOT EXISTS idx_apt_geo_area ON apartment_geo_areas(geo_area_id);
+
+-- Station to geo area mapping
+CREATE TABLE IF NOT EXISTS station_geo_areas (
+  station_id TEXT NOT NULL REFERENCES bart_stations(id),
+  geo_area_id TEXT NOT NULL REFERENCES geo_areas(id),
+  PRIMARY KEY (station_id, geo_area_id)
+);

@@ -89,3 +89,24 @@ export interface Filters {
   maxCommuteMin: number; // max minutes, 60 = no limit
   minSafetyScore: number; // 1-10, 1 = no filter
 }
+
+export interface SafetyArea {
+  id: string;
+  name: string;
+  type: 'city' | 'neighborhood' | 'beat' | 'county' | 'tract';
+  parentId: string | null;
+  score: number;
+  counts: {
+    violent: number;
+    property: number;
+    vehicle: number;
+    qualityOfLife: number;
+  };
+  sources: string[];
+  centroidLat: number;
+  centroidLng: number;
+  percentile?: number;  // 0-100, "safer than X% of Bay Area"
+  population: number | null;
+  perCapitaRate: number | null;
+  dataGranularity: 'direct' | 'inherited';
+}

@@ -3,6 +3,8 @@
 import { useEffect, useRef } from 'react';
 import { useAppStore } from './store';
 import type { Filters } from './types';
+import type { SafetyPreset } from './crime-taxonomy';
+import { WEIGHT_PRESETS } from './crime-taxonomy';
 
 function initStoreFromUrl() {
   if (typeof window === 'undefined') return;
@@ -42,6 +44,28 @@ function initStoreFromUrl() {
     if (!isNaN(val)) store.setMinSafety(val);
   }
 
+  // Safety weights
+  const preset = params.get('preset') as SafetyPreset | null;
+  if (preset && preset !== 'custom' && preset in WEIGHT_PRESETS) {
+    store.setSafetyPreset(preset);
+  } else if (preset === 'custom') {
+    const wv = params.get('wv');
+    const wp = params.get('wp');
+    const wve = params.get('wve');
+    const wq = params.get('wq');
+    if (wv && wp && wve && wq) {
+      const weights = {
+        violent: parseFloat(wv),
+        property: parseFloat(wp),
+        vehicle: parseFloat(wve),
+        qualityOfLife: parseFloat(wq),
+      };
+      if (Object.values(weights).every((n) => !isNaN(n) && n >= 0)) {
+        store.setSafetyWeights(weights);
+      }
+    }
+  }
+
   const lat = params.get('lat');
   const lng = params.get('lng');
   const zoom = params.get('zoom');
@@ -71,6 +95,17 @@ function writeFiltersToUrl(filters: Filters) {
   if (filters.maxCommuteMin < 60) params.set('commute', String(filters.maxCommuteMin));
   if (filters.minSafetyScore > 1) params.set('safety', String(filters.minSafetyScore));
 
+  const { safetyPreset, safetyWeights } = useAppStore.getState();
+  if (safetyPreset !== 'balanced') {
+    params.set('preset', safetyPreset);
+    if (safetyPreset === 'custom') {
+      params.set('wv', String(safetyWeights.violent));
+      params.set('wp', String(safetyWeights.property));
+      params.set('wve', String(safetyWeights.vehicle));
+      params.set('wq', String(safetyWeights.qualityOfLife));
+    }
+  }
+
   const viewport = useAppStore.getState().viewport;
   if (viewport.latitude !== 37.7749 || viewport.longitude !== -122.2194 || viewport.zoom !== 10) {
     params.set('lat', viewport.latitude.toFixed(4));
@@ -86,6 +121,8 @@ function writeFiltersToUrl(filters: Filters) {
 export function useUrlSync() {
   const initialized = useRef(false);
   const filters = useAppStore((s) => s.filters);
+  const safetyPreset = useAppStore((s) => s.safetyPreset);
+  const safetyWeights = useAppStore((s) => s.safetyWeights);
 
   // On mount: read URL params and initialize store
   useEffect(() => {
@@ -95,7 +132,7 @@ export function useUrlSync() {
     }
   }, []);
 
-  // On filter change: write to URL (skip on first render to avoid overwriting initial URL params)
+  // On filter/safety change: write to URL (skip on first render to avoid overwriting initial URL params)
   const isFirstRender = useRef(true);
   useEffect(() => {
     if (isFirstRender.current) {
@@ -103,7 +140,7 @@ export function useUrlSync() {
       return;
     }
     writeFiltersToUrl(filters);
-  }, [filters]);
+  }, [filters, safetyPreset, safetyWeights]);
 
   // Subscribe to viewport changes outside React's render cycle to avoid
   // infinite loops (Map.tsx creates new viewport objects on every onMove)

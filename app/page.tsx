@@ -20,6 +20,7 @@ export default function Home() {
   const setStations = useAppStore((s) => s.setStations);
   const setApartments = useAppStore((s) => s.setApartments);
   const setCitySafety = useAppStore((s) => s.setCitySafety);
+  const setSafetyAreas = useAppStore((s) => s.setSafetyAreas);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,9 +31,11 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      const [stationsRes, apartmentsRes] = await Promise.all([
-        fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/api/stations`, { cache: 'no-cache' }),
-        fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/api/apartments?bbox=37.3,-122.6,38.1,-121.7`, { cache: 'no-cache' }),
+      const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+      const [stationsRes, apartmentsRes, safetyRes] = await Promise.all([
+        fetch(`${basePath}/api/stations`, { cache: 'no-cache' }),
+        fetch(`${basePath}/api/apartments?bbox=37.3,-122.6,38.1,-121.7`, { cache: 'no-cache' }),
+        fetch(`${basePath}/api/safety`, { cache: 'no-store' }).catch(() => null),
       ]);
       if (!stationsRes.ok || !apartmentsRes.ok) {
         throw new Error('Failed to fetch data');
@@ -44,12 +47,20 @@ export default function Home() {
       setStations(stationsData.stations);
       setApartments(apartmentsData.apartments);
       if (stationsData.citySafety) setCitySafety(stationsData.citySafety);
+      if (safetyRes?.ok) {
+        const safetyData = await safetyRes.json();
+        setSafetyAreas(safetyData.areas);
+        // Immediately recompute scores client-side with current preset
+        // to ensure consistency (server scores use different area sets)
+        const { safetyPreset, setSafetyPreset } = useAppStore.getState();
+        setSafetyPreset(safetyPreset);
+      }
     } catch {
       setError('Failed to load BART data. Please try again.');
     } finally {
       setLoading(false);
     }
-  }, [setStations, setApartments, setCitySafety]);
+  }, [setStations, setApartments, setCitySafety, setSafetyAreas]);
 
   useEffect(() => {
     fetchData();

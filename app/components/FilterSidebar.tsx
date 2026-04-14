@@ -4,6 +4,7 @@ import * as Slider from '@radix-ui/react-slider';
 import * as Checkbox from '@radix-ui/react-checkbox';
 import { useAppStore, selectFilteredApartments } from '@/lib/store';
 import ApartmentCard from './ApartmentCard';
+import SafetyWeightControls from './SafetyWeightControls';
 
 const BEDROOM_OPTIONS = [
   { value: 0, label: 'Studio' },
@@ -54,6 +55,7 @@ export default function FilterSidebar() {
   const setMinSafety = useAppStore((s) => s.setMinSafety);
   const selectApartment = useAppStore((s) => s.selectApartment);
   const resetFilters = useAppStore((s) => s.resetFilters);
+  const safetyOverlayVisible = useAppStore((s) => s.safetyOverlayVisible);
 
   return (
     <aside className="w-[360px] bg-white border-r border-gray-200 flex flex-col h-full">
@@ -173,6 +175,16 @@ export default function FilterSidebar() {
             </SliderTrack>
           </Slider.Root>
         </section>
+
+        {/* Safety Weights — only when overlay is on */}
+        {safetyOverlayVisible && (
+          <section>
+            <span className="text-sm font-medium text-gray-700">Safety Weights</span>
+            <div className="mt-2">
+              <SafetyWeightControls />
+            </div>
+          </section>
+        )}
 
         {/* Result Count */}
         <div className="text-sm font-medium text-gray-600">

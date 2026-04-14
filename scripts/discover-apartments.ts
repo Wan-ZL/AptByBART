@@ -52,6 +52,19 @@ interface DiscoveredApartment {
   walk_min_to_bart: number;
 }
 
+const BAY_AREA_CITIES = [
+  'San Francisco', 'Oakland', 'Berkeley', 'San Jose', 'Fremont',
+  'Hayward', 'Richmond', 'Concord', 'Daly City', 'San Leandro',
+  'South San Francisco', 'San Bruno', 'Milpitas', 'Union City',
+  'Dublin', 'Pleasanton', 'Livermore', 'Walnut Creek', 'Pleasant Hill',
+  'Lafayette', 'Orinda', 'El Cerrito', 'Antioch', 'Pittsburg',
+  'San Mateo', 'Redwood City', 'Palo Alto', 'Mountain View',
+  'Sunnyvale', 'Santa Clara', 'Campbell', 'Cupertino', 'San Ramon',
+  'Danville', 'Castro Valley', 'Newark', 'Alameda', 'Emeryville',
+  'Albany', 'Burlingame', 'Millbrae', 'Foster City', 'Belmont',
+  'San Carlos', 'Menlo Park',
+];
+
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
@@ -98,7 +111,7 @@ async function searchNearby(lat: number, lng: number): Promise<PlaceResult[]> {
     locationRestriction: {
       circle: {
         center: { latitude: lat, longitude: lng },
-        radius: 1600,
+        radius: 2500,
       },
     },
     maxResultCount: 20,
@@ -124,8 +137,101 @@ async function searchNearby(lat: number, lng: number): Promise<PlaceResult[]> {
   return data.places ?? [];
 }
 
+async function textSearchByCity(city: string): Promise<PlaceResult[]> {
+  const url = 'https://places.googleapis.com/v1/places:searchText';
+  const allResults: PlaceResult[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const body: any = {
+      textQuery: `apartments for rent in ${city}, CA`,
+      includedType: 'apartment_complex',
+      pageSize: 20,
+    };
+    if (pageToken) body.pageToken = pageToken;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY!,
+        'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,places.websiteUri,places.rating,places.userRatingCount,places.types,nextPageToken',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      console.warn(`  Text search error for ${city}: ${res.status} ${text}`);
+      break;
+    }
+
+    const data = await res.json();
+    if (data.places) allResults.push(...data.places);
+    pageToken = data.nextPageToken;
+
+    // Rate limit between pagination
+    if (pageToken) await sleep(500);
+  } while (pageToken);
+
+  return allResults;
+}
+
 function normalizeAddress(addr: string): string {
   return addr.toLowerCase().replace(/[.,#\-]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function collectPlaces(
+  places: PlaceResult[],
+  stations: Station[],
+  allPlaces: DiscoveredApartment[],
+  seenAddresses: Set<string>,
+  seenWebsites: Set<string>,
+): { added: number; skippedNoUrl: number } {
+  let added = 0;
+  let skippedNoUrl = 0;
+
+  for (const place of places) {
+    const name = place.displayName?.text;
+    const address = place.formattedAddress;
+    const lat = place.location?.latitude;
+    const lng = place.location?.longitude;
+    const website = place.websiteUri ?? '';
+
+    if (!name || !address || lat == null || lng == null) continue;
+
+    // Skip apartments without a website — can't scrape them
+    if (!website) {
+      console.log(`  Skipping ${name} — no website URL`);
+      skippedNoUrl++;
+      continue;
+    }
+
+    // Deduplicate by normalized address
+    const normAddr = normalizeAddress(address);
+    if (seenAddresses.has(normAddr)) continue;
+
+    // Deduplicate by website URL
+    if (seenWebsites.has(website)) continue;
+
+    seenAddresses.add(normAddr);
+    seenWebsites.add(website);
+
+    const { stationId, walkMin } = findNearestStation(lat, lng, stations);
+
+    allPlaces.push({
+      name,
+      address,
+      lat,
+      lng,
+      website_url: website,
+      nearest_station_id: stationId,
+      walk_min_to_bart: walkMin,
+    });
+    added++;
+  }
+
+  return { added, skippedNoUrl };
 }
 
 async function main() {
@@ -145,10 +251,37 @@ async function main() {
     process.exit(1);
   }
 
-  // 2. Search for apartments near each station
   const allPlaces: DiscoveredApartment[] = [];
   const seenAddresses = new Set<string>();
   const seenWebsites = new Set<string>();
+  let totalSkippedNoUrl = 0;
+
+  // 2. Phase 1: Text Search by city (primary discovery)
+  console.log('=== Phase 1: Text Search by City ===\n');
+
+  for (let i = 0; i < BAY_AREA_CITIES.length; i++) {
+    const city = BAY_AREA_CITIES[i];
+    console.log(`[${i + 1}/${BAY_AREA_CITIES.length}] Searching "${city}"...`);
+
+    try {
+      const places = await textSearchByCity(city);
+      const { added, skippedNoUrl } = collectPlaces(
+        places, stations, allPlaces, seenAddresses, seenWebsites,
+      );
+      totalSkippedNoUrl += skippedNoUrl;
+      console.log(`  Found ${places.length} results, ${added} new unique apartments (${skippedNoUrl} skipped — no URL)`);
+    } catch (err) {
+      console.error(`  Error searching ${city}:`, (err as Error).message);
+    }
+
+    // Rate limit: 500ms between cities
+    if (i < BAY_AREA_CITIES.length - 1) await sleep(500);
+  }
+
+  console.log(`\nPhase 1 complete: ${allPlaces.length} apartments from text search.\n`);
+
+  // 3. Phase 2: Nearby Search around BART stations (supplement)
+  console.log('=== Phase 2: Nearby Search around BART Stations ===\n');
 
   for (let i = 0; i < stations.length; i++) {
     const station = stations[i];
@@ -156,42 +289,11 @@ async function main() {
 
     try {
       const places = await searchNearby(station.lat, station.lng);
-      let added = 0;
-
-      for (const place of places) {
-        const name = place.displayName?.text;
-        const address = place.formattedAddress;
-        const lat = place.location?.latitude;
-        const lng = place.location?.longitude;
-        const website = place.websiteUri ?? '';
-
-        if (!name || !address || lat == null || lng == null) continue;
-
-        // Deduplicate by normalized address
-        const normAddr = normalizeAddress(address);
-        if (seenAddresses.has(normAddr)) continue;
-
-        // Deduplicate by website URL (if present)
-        if (website && seenWebsites.has(website)) continue;
-
-        seenAddresses.add(normAddr);
-        if (website) seenWebsites.add(website);
-
-        const { stationId, walkMin } = findNearestStation(lat, lng, stations);
-
-        allPlaces.push({
-          name,
-          address,
-          lat,
-          lng,
-          website_url: website,
-          nearest_station_id: stationId,
-          walk_min_to_bart: walkMin,
-        });
-        added++;
-      }
-
-      console.log(`  Found ${places.length} results, ${added} new unique apartments`);
+      const { added, skippedNoUrl } = collectPlaces(
+        places, stations, allPlaces, seenAddresses, seenWebsites,
+      );
+      totalSkippedNoUrl += skippedNoUrl;
+      console.log(`  Found ${places.length} results, ${added} new unique apartments (${skippedNoUrl} skipped — no URL)`);
     } catch (err) {
       console.error(`  Error searching near ${station.name}:`, (err as Error).message);
     }
@@ -200,14 +302,15 @@ async function main() {
     if (i < stations.length - 1) await sleep(500);
   }
 
-  console.log(`\nDiscovered ${allPlaces.length} unique apartments total.\n`);
+  console.log(`\nPhase 2 complete: ${allPlaces.length} total apartments after nearby search.`);
+  console.log(`Skipped ${totalSkippedNoUrl} apartments total (no website URL).\n`);
 
   if (allPlaces.length === 0) {
     console.log('No apartments found. Done.');
     return;
   }
 
-  // 3. Check which apartments already exist in the database
+  // 4. Check which apartments already exist in the database
   const existingResult = await db.execute('SELECT address FROM apartments');
   const existingAddresses = new Set(
     existingResult.rows.map((r: any) => normalizeAddress(r.address as string))
@@ -224,7 +327,7 @@ async function main() {
     return;
   }
 
-  // 4. Insert new apartments in batches
+  // 5. Insert new apartments in batches
   const BATCH_SIZE = 50;
   let inserted = 0;
 
@@ -244,8 +347,9 @@ async function main() {
     console.log(`  Inserted ${inserted}/${newApartments.length}`);
   }
 
-  // 5. Summary
-  console.log(`\nDone! Inserted ${inserted} new apartments.\n`);
+  // 6. Summary
+  console.log(`\nDone! Inserted ${inserted} new apartments.`);
+  console.log(`Total in database: ${(await db.execute('SELECT COUNT(*) as c FROM apartments')).rows[0].c}\n`);
 
   console.log('=== Top 20 Closest to BART ===');
   console.log('Name'.padEnd(40) + 'Station'.padStart(8) + 'Walk'.padStart(8));

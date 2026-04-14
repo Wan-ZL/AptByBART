@@ -1,96 +1,155 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Source, Layer } from 'react-map-gl/maplibre';
 import { useAppStore } from '@/lib/store';
+import type { SafetyArea } from '@/lib/types';
 
-function createCirclePolygon(
-  lng: number,
-  lat: number,
-  radiusMeters: number,
-  numPoints: number = 32,
-): GeoJSON.Feature<GeoJSON.Polygon> {
-  const coords: [number, number][] = [];
-  const earthRadius = 6371000;
-  for (let i = 0; i <= numPoints; i++) {
-    const angle = (i / numPoints) * 2 * Math.PI;
-    const dLat = (radiusMeters / earthRadius) * Math.cos(angle);
-    const dLng =
-      (radiusMeters / (earthRadius * Math.cos((lat * Math.PI) / 180))) *
-      Math.sin(angle);
-    coords.push([lng + (dLng * 180) / Math.PI, lat + (dLat * 180) / Math.PI]);
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+
+// Score-driven color interpolation (red -> orange -> yellow -> light blue -> blue)
+const SCORE_FILL_COLOR: maplibregl.ExpressionSpecification = [
+  'interpolate', ['linear'], ['get', 'score'],
+  1, '#dc2626',
+  3, '#f97316',
+  5, '#eab308',
+  7, '#60a5fa',
+  9, '#2563eb',
+];
+
+const SCORE_LINE_COLOR: maplibregl.ExpressionSpecification = [
+  'interpolate', ['linear'], ['get', 'score'],
+  1, '#b91c1c',
+  3, '#ea580c',
+  5, '#ca8a04',
+  7, '#3b82f6',
+  9, '#1d4ed8',
+];
+
+function enrichFeatures(
+  geojson: GeoJSON.FeatureCollection | null,
+  safetyAreas: SafetyArea[]
+): { withData: GeoJSON.FeatureCollection; noData: GeoJSON.FeatureCollection } {
+  const empty: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+  if (!geojson) return { withData: empty, noData: empty };
+
+  const areaMap = new Map<string, SafetyArea>();
+  for (const a of safetyAreas) areaMap.set(a.id, a);
+
+  const withDataFeatures: GeoJSON.Feature[] = [];
+  const noDataFeatures: GeoJSON.Feature[] = [];
+
+  for (const feature of geojson.features) {
+    const areaId = feature.properties?.areaId;
+    if (!areaId) continue;
+
+    const matched = areaMap.get(areaId);
+    if (matched) {
+      withDataFeatures.push({
+        ...feature,
+        properties: {
+          ...feature.properties,
+          score: matched.score,
+        },
+      });
+    } else {
+      noDataFeatures.push(feature);
+    }
   }
+
   return {
-    type: 'Feature',
-    properties: {},
-    geometry: { type: 'Polygon', coordinates: [coords] },
+    withData: { type: 'FeatureCollection', features: withDataFeatures },
+    noData: { type: 'FeatureCollection', features: noDataFeatures },
   };
 }
 
-function safetyColor(score: number): string {
-  if (score >= 8) return '#22c55e';
-  if (score >= 6) return '#eab308';
-  if (score >= 4) return '#f97316';
-  return '#ef4444';
-}
-
 export default function SafetyOverlay() {
-  const citySafety = useAppStore((s) => s.citySafety);
+  const safetyAreas = useAppStore((s) => s.safetyAreas);
   const visible = useAppStore((s) => s.safetyOverlayVisible);
-  const radius = useAppStore((s) => s.safetyRadius);
+  const [geojson, setGeojson] = useState<GeoJSON.FeatureCollection | null>(null);
 
-  // Cities WITH data — filled circles
-  const filledGeoJSON = useMemo<GeoJSON.FeatureCollection>(() => {
-    const features = citySafety
-      .filter((c) => c.safetyScore != null && c.safetyScore > 0)
-      .map((c) => {
-        const feature = createCirclePolygon(c.lng, c.lat, radius);
-        feature.properties = {
-          color: safetyColor(c.safetyScore!),
-          city: c.city,
-        };
-        return feature;
-      });
-    return { type: 'FeatureCollection', features };
-  }, [citySafety, radius]);
+  useEffect(() => {
+    fetch(`${basePath}/unified-safety.geojson`)
+      .then((r) => r.json())
+      .then(setGeojson)
+      .catch((e) => console.warn('Failed to load unified-safety.geojson', e));
+  }, []);
 
-  // Cities WITHOUT data — outline-only circles
-  const outlineGeoJSON = useMemo<GeoJSON.FeatureCollection>(() => {
-    const features = citySafety
-      .filter((c) => c.safetyScore == null || c.safetyScore === 0)
-      .map((c) => {
-        const feature = createCirclePolygon(c.lng, c.lat, radius);
-        feature.properties = { city: c.city };
-        return feature;
-      });
-    return { type: 'FeatureCollection', features };
-  }, [citySafety, radius]);
+  const { withData, noData } = useMemo(
+    () => enrichFeatures(geojson, safetyAreas),
+    [geojson, safetyAreas]
+  );
 
-  if (!visible) return null;
+  // Always render layers (even when hidden) to preserve z-order in MapLibre.
+  // Toggling visibility via layout property keeps layers in the correct stack position.
+  const vis = visible ? 'visible' : 'none';
 
   return (
     <>
-      {/* Filled circles for cities with data */}
-      <Source id="safety-overlay" type="geojson" data={filledGeoJSON}>
+      {/* Scored areas — single unified layer, constant opacity */}
+      <Source id="safety-unified" type="geojson" data={withData}>
         <Layer
-          id="safety-overlay-fill"
+          id="safety-fill"
           type="fill"
+          layout={{ visibility: vis }}
           paint={{
-            'fill-color': ['get', 'color'],
-            'fill-opacity': 0.35,
+            'fill-color': SCORE_FILL_COLOR,
+            'fill-opacity': 0.3,
+          }}
+        />
+        <Layer
+          id="safety-stroke"
+          type="line"
+          layout={{ visibility: vis }}
+          paint={{
+            'line-color': SCORE_LINE_COLOR,
+            'line-width': ['interpolate', ['linear'], ['zoom'],
+              8, 0.5,
+              12, 1.5,
+              16, 2.5,
+            ],
+            'line-opacity': 0.8,
+          }}
+        />
+        <Layer
+          id="safety-labels"
+          type="symbol"
+          layout={{
+            visibility: vis,
+            'text-field': ['get', 'areaName'],
+            'text-size': ['interpolate', ['linear'], ['zoom'], 10, 9, 14, 12],
+            'text-anchor': 'center',
+            'text-allow-overlap': false,
+            'text-font': ['Noto Sans Regular'],
+          }}
+          paint={{
+            'text-color': '#1f2937',
+            'text-halo-color': '#ffffff',
+            'text-halo-width': 1.5,
+            'text-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0, 11, 1],
           }}
         />
       </Source>
 
-      {/* Outline-only circles for cities without data */}
-      <Source id="safety-overlay-nodata" type="geojson" data={outlineGeoJSON}>
+      {/* No-data areas — gray, no labels */}
+      <Source id="safety-nodata" type="geojson" data={noData}>
         <Layer
-          id="safety-overlay-nodata-outline"
+          id="safety-nodata-fill"
+          type="fill"
+          layout={{ visibility: vis }}
+          paint={{
+            'fill-color': '#e5e7eb',
+            'fill-opacity': 0.15,
+          }}
+        />
+        <Layer
+          id="safety-nodata-stroke"
           type="line"
+          layout={{ visibility: vis }}
           paint={{
             'line-color': '#9ca3af',
-            'line-width': 1.5,
-            'line-dasharray': [4, 3],
+            'line-width': 1,
+            'line-opacity': 0.5,
           }}
         />
       </Source>
@@ -118,38 +177,32 @@ export function SafetyToggleButton() {
 
 export function SafetyLegend() {
   const visible = useAppStore((s) => s.safetyOverlayVisible);
-  const radius = useAppStore((s) => s.safetyRadius);
-  const setRadius = useAppStore((s) => s.setSafetyRadius);
+  const safetyPreset = useAppStore((s) => s.safetyPreset);
 
   if (!visible) return null;
 
+  const presetLabels: Record<string, string> = {
+    balanced: 'Balanced',
+    personal_safety: 'Personal Safety',
+    protect_my_stuff: 'Protect My Stuff',
+    night_owl: 'Night Owl',
+    custom: 'Custom',
+  };
+
   return (
     <div className="absolute bottom-8 left-3 bg-white/90 backdrop-blur-sm rounded-lg shadow-md px-3 py-2 text-xs z-10">
-      <div className="font-medium text-gray-700 mb-1">Safety Score</div>
-      <div className="flex flex-col gap-1">
-        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#22c55e]" /> 8-10 Safest</div>
-        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#eab308]" /> 6-8 Moderate</div>
-        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#f97316]" /> 4-6 Caution</div>
-        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#ef4444]" /> 1-4 Higher Risk</div>
-        <div className="flex items-center gap-2">
-          <span className="w-3 h-3 rounded-full border border-gray-400 border-dashed" />
-          No data
-        </div>
+      <div className="font-medium text-gray-700 mb-1.5">
+        Safety — {presetLabels[safetyPreset] || safetyPreset}
       </div>
-      <div className="mt-2 pt-2 border-t border-gray-200">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-gray-600">Radius</span>
-          <span className="text-gray-500">{(radius / 1000).toFixed(1)} km</span>
-        </div>
-        <input
-          type="range"
-          min={1000}
-          max={15000}
-          step={500}
-          value={radius}
-          onChange={(e) => setRadius(Number(e.target.value))}
-          className="w-full h-1 bg-gray-300 rounded-full appearance-none cursor-pointer accent-blue-500"
-        />
+      <div
+        className="h-2.5 w-36 rounded-full mb-1"
+        style={{
+          background: 'linear-gradient(to right, #dc2626, #f97316, #eab308, #60a5fa, #2563eb)',
+        }}
+      />
+      <div className="flex justify-between text-[10px] text-gray-500 w-36">
+        <span>Higher Risk</span>
+        <span>Safest</span>
       </div>
     </div>
   );

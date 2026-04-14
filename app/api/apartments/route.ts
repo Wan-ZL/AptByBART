@@ -39,6 +39,7 @@ export async function GET(request: NextRequest) {
     const conditions: string[] = [
       "a.lat BETWEEN ? AND ?",
       "a.lng BETWEEN ? AND ?",
+      "a.website_url IS NOT NULL AND a.website_url != ''",
     ];
     const args: (string | number)[] = [swLat, neLat, swLng, neLng];
 

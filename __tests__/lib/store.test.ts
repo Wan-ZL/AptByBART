@@ -830,7 +830,6 @@ describe('Store initialization defaults', () => {
       selectedStationId: null,
       safetyOverlayVisible: false,
       mapStyle: 'https://tiles.openfreemap.org/styles/positron',
-      safetyRadius: 5000,
       viewport: { latitude: 37.7749, longitude: -122.2194, zoom: 10 },
     });
   });
@@ -886,12 +885,6 @@ describe('Store initialization defaults', () => {
     expect(useAppStore.getState().mapStyle.length).toBeGreaterThan(0);
   });
 
-  // Kill: setSafetyRadius arrow function and object literal mutants
-  it('setSafetyRadius updates safetyRadius', () => {
-    useAppStore.getState().setSafetyRadius(10000);
-    expect(useAppStore.getState().safetyRadius).toBe(10000);
-    expect(useAppStore.getState().safetyRadius).not.toBe(5000);
-  });
 });
 
 describe('Store create() initial values — no beforeEach reset', () => {

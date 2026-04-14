@@ -16,6 +16,7 @@ import type { BartStation, Apartment } from '@/lib/types';
 import SafetyOverlay, { SafetyLegend } from './SafetyOverlay';
 import StationPopup from './StationPopup';
 import ApartmentPopup from './ApartmentPopup';
+import SafetyDetailPanel from './SafetyDetailPanel';
 
 // BART line route definitions — station IDs in order, grouped by line color
 const BART_LINES: Record<string, string[]> = {
@@ -130,8 +131,8 @@ function buildApartmentsGeoJSON(apartments: Apartment[]): GeoJSON.FeatureCollect
         properties: {
           id: a.id,
           name: a.name,
-          price: a.minPrice ?? 0,
-          maxPrice: a.maxPrice ?? 0,
+          price: a.minPrice ?? -1,
+          maxPrice: a.maxPrice ?? -1,
           priceLabel,
         },
         geometry: { type: 'Point' as const, coordinates: [a.lng, a.lat] },
@@ -149,6 +150,7 @@ export default function MapView() {
   const setViewport = useAppStore((s) => s.setViewport);
   const selectApartment = useAppStore((s) => s.selectApartment);
   const selectStation = useAppStore((s) => s.selectStation);
+  const selectSafetyArea = useAppStore((s) => s.selectSafetyArea);
   const mapStyle = useAppStore((s) => s.mapStyle);
   const setMapStyle = useAppStore((s) => s.setMapStyle);
 
@@ -230,15 +232,28 @@ export default function MapView() {
         return;
       }
 
+      // Check safety overlay layers
+      const safetyFeatures = mapRef.current?.queryRenderedFeatures(e.point, {
+        layers: ['safety-fill'],
+      });
+      if (safetyFeatures?.length) {
+        const areaId = safetyFeatures[0].properties?.areaId;
+        if (areaId) {
+          selectSafetyArea(areaId as string);
+          return;
+        }
+      }
+
       // Clicked empty map space — dismiss any open popup
       selectApartment(null);
       selectStation(null);
+      selectSafetyArea(null);
     },
-    [selectStation, selectApartment],
+    [selectStation, selectApartment, selectSafetyArea],
   );
 
   const interactiveLayerIds = useMemo(
-    () => ['stations-layer', 'clusters', 'apartment-points'],
+    () => ['stations-layer', 'clusters', 'apartment-points', 'safety-fill'],
     [],
   );
 
@@ -255,6 +270,9 @@ export default function MapView() {
       cursor="auto"
       style={{ width: '100%', height: '100%' }}
     >
+      {/* Safety overlay — rendered first so it's below all other data layers */}
+      <SafetyOverlay />
+
       {/* BART lines */}
       <Source id="bart-lines" type="geojson" data={bartLinesGeoJSON}>
         {/* White outline layer for visual separation between adjacent lines */}
@@ -322,9 +340,9 @@ export default function MapView() {
         clusterMaxZoom={14}
         clusterRadius={50}
         clusterProperties={{
-          clusterMinPrice: ['min', ['get', 'price']],
-          clusterMaxPrice: ['max', ['get', 'maxPrice']],
-          hasPrices: ['+', ['case', ['>', ['get', 'price'], 0], 1, 0]],
+          clusterMinPrice: [['min', ['accumulated'], ['get', 'clusterMinPrice']], ['case', ['>', ['get', 'price'], 0], ['get', 'price'], 999999]] as any,
+          clusterMaxPrice: [['max', ['accumulated'], ['get', 'clusterMaxPrice']], ['case', ['>', ['get', 'maxPrice'], 0], ['get', 'maxPrice'], 0]] as any,
+          hasPrices: [['+', ['accumulated'], ['get', 'hasPrices']], ['case', ['>', ['get', 'price'], 0], 1, 0]] as any,
         }}
       >
         {/* Cluster circles */}
@@ -394,7 +412,7 @@ export default function MapView() {
                   ['to-string', ['round', ['get', 'clusterMaxPrice']]]
                 ],
               ],
-              '',
+              'N/A',
             ],
             'text-font': ['Noto Sans Regular'],
             'text-size': 9,
@@ -416,9 +434,16 @@ export default function MapView() {
           filter={['!', ['has', 'point_count']]}
           paint={{
             'circle-radius': 7,
-            'circle-color': '#3B82F6',
+            // Reference price/maxPrice so MapLibre preserves them for clusterProperties
+            'circle-color': ['case',
+              ['>', ['get', 'price'], 0], '#3B82F6',
+              '#9CA3AF',
+            ],
             'circle-stroke-width': 2,
-            'circle-stroke-color': '#ffffff',
+            'circle-stroke-color': ['case',
+              ['>', ['get', 'maxPrice'], 0], '#ffffff',
+              '#ffffff',
+            ],
           }}
         />
 
@@ -444,9 +469,9 @@ export default function MapView() {
         />
       </Source>
 
-      {/* Overlays and popups (must be inside MapGL) */}
-      <SafetyOverlay />
+      {/* Popups, panels, and legend (must be inside MapGL) */}
       <SafetyLegend />
+      <SafetyDetailPanel />
       <StationPopup />
       <ApartmentPopup />
 
