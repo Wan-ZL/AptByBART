@@ -109,8 +109,8 @@ function parseReviewResponse(text: string): ReviewResult[] {
     if (!Array.isArray(parsed)) return [];
 
     return parsed
-      .filter((item: unknown) => typeof item === 'object' && item !== null)
-      .map((item: Record<string, unknown>) => ({
+      .filter((item: unknown): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+      .map((item) => ({
         id: Number(item.id),
         status: (['OK', 'SUSPICIOUS', 'NEEDS_VERIFY'].includes(item.status as string)
           ? item.status
