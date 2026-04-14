@@ -79,3 +79,15 @@ Scripts manually parse `.env.local` (no dotenv dependency). They import `db` fro
 | `TURSO_AUTH_TOKEN` | Production DB | Paired with URL above |
 | `GOOGLE_PLACES_API_KEY` | `discover:apartments` script | Not needed for web app |
 | `ANTHROPIC_API_KEY` | T4 Claude fallback scraper | Optional, scraper skips T4 without it |
+
+## Scraper Pipeline
+
+```bash
+npm run scrape:pipeline   # Full pipeline: T1→T2→T3→Review→T4→Merge
+npm run scrape -- --tier t1  # T1 only (RentCafe API)
+npm run scrape -- --tier t2  # T2 only (Cheerio HTML)
+npm run scrape -- --tier t3  # T3 only (Crawl4AI)
+npm run scrape -- --tier t4  # T4 only (AI+Playwright, reads from t4_pool.json)
+npm run scrape -- --fast     # T1+T2 only (skip slow tiers)
+```
+
