@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
+import { childLogger } from "@/lib/logger";
+
+const log = childLogger("api:apartments:id:safety");
 
 const GRANULARITY_PRIORITY: Record<string, number> = {
   beat: 0,
@@ -12,8 +15,10 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const started = Date.now();
   try {
     const { id } = await params;
+    log.info({ method: "GET", url: `/api/apartments/${id}/safety` }, "request");
 
     // Verify apartment exists
     const aptCheck = await db.execute({
@@ -66,6 +71,15 @@ export async function GET(
 
     const best = withScores[0] ?? null;
 
+    log.info(
+      {
+        status: 200,
+        durationMs: Date.now() - started,
+        id,
+        scoreCount: scores.length,
+      },
+      "response"
+    );
     return NextResponse.json(
       {
         apartmentId: Number(id),
@@ -88,6 +102,10 @@ export async function GET(
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (msg.includes("no such table")) {
+      log.warn(
+        { durationMs: Date.now() - started },
+        "no such table — returning empty"
+      );
       return NextResponse.json(
         { scores: [], bestAvailable: null },
         {
@@ -97,7 +115,10 @@ export async function GET(
         }
       );
     }
-    console.error("GET /api/apartments/[id]/safety error:", error);
+    log.error(
+      { err: error, durationMs: Date.now() - started },
+      "handler error"
+    );
     return NextResponse.json(
       { error: "Failed to fetch safety data" },
       { status: 500 }

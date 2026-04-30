@@ -234,7 +234,7 @@ export default function MapView() {
 
       // Check safety overlay layers
       const safetyFeatures = mapRef.current?.queryRenderedFeatures(e.point, {
-        layers: ['safety-fill'],
+        layers: ['safety-fill-tract'],
       });
       if (safetyFeatures?.length) {
         const areaId = safetyFeatures[0].properties?.areaId;
@@ -253,7 +253,7 @@ export default function MapView() {
   );
 
   const interactiveLayerIds = useMemo(
-    () => ['stations-layer', 'clusters', 'apartment-points', 'safety-fill'],
+    () => ['stations-layer', 'clusters', 'apartment-points', 'safety-fill-tract'],
     [],
   );
 

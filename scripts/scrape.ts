@@ -5,6 +5,9 @@ import { scrapeRentCafe, ScrapedFloorPlan } from './scrapers/rentcafe';
 import { scrapeWithCheerio, scrapeAmenitiesFromUrl, detectAmenities, validatePrices } from './scrapers/http-cheerio';
 import { scrapeWithCrawl4AI } from './scrapers/crawl4ai-scraper';
 import { scrapeWithAIPlaywright } from './scrapers/ai-playwright-scraper';
+import { childLogger } from '../lib/logger';
+
+const log = childLogger('scrape');
 
 // Load .env.local manually (no dotenv dependency)
 try {
@@ -513,13 +516,22 @@ async function runLegacy() {
 
     for (const tier of orderedTiers) {
       try {
+        log.debug({ apartmentId: apt.id, tier: tier.name }, 'tier attempt');
         console.log(`  Trying ${tier.name}...`);
         plans = await tier.fn({ id: apt.id, websiteUrl: apt.website_url });
         if (plans && plans.length > 0) {
           usedTier = tier.name;
+          log.info(
+            { apartmentId: apt.id, tier: tier.name, planCount: plans.length },
+            'tier success'
+          );
           break;
         }
       } catch (err) {
+        log.warn(
+          { apartmentId: apt.id, tier: tier.name, err },
+          'tier failed'
+        );
         console.log(`  ${tier.name} failed: ${(err as Error).message}`);
       }
     }
@@ -562,6 +574,10 @@ async function runLegacy() {
 
       await logScrape(apt.id, 'success', durationMs);
     } else {
+      log.error(
+        { apartmentId: apt.id, durationMs, apartmentName: apt.name },
+        'all tiers failed'
+      );
       console.log(`  ✗ All tiers failed (${durationMs}ms)`);
       failed++;
 

@@ -16,18 +16,18 @@ interface TrendMonth {
 }
 
 function scoreColor(score: number): string {
-  if (score >= 8) return '#2563eb';  // blue (safest)
-  if (score >= 6) return '#60a5fa';  // light blue
-  if (score >= 4) return '#eab308';  // yellow
-  if (score >= 2) return '#f97316';  // orange
-  return '#dc2626';                   // red (highest risk)
+  if (score <= 0.2) return '#2563eb';  // blue (safest)
+  if (score <= 0.4) return '#60a5fa';  // light blue
+  if (score <= 0.6) return '#eab308';  // yellow
+  if (score <= 0.8) return '#f97316';  // orange
+  return '#dc2626';                     // red (highest risk)
 }
 
 function letterGrade(score: number): string {
-  if (score >= 9) return 'A';
-  if (score >= 7) return 'B';
-  if (score >= 5) return 'C';
-  if (score >= 3) return 'D';
+  if (score <= 0.2) return 'A';
+  if (score <= 0.4) return 'B';
+  if (score <= 0.6) return 'C';
+  if (score <= 0.8) return 'D';
   return 'F';
 }
 
@@ -125,13 +125,13 @@ export default function SafetyDetailPanel() {
           className="flex flex-col items-center justify-center w-10 h-10 rounded-full text-white"
           style={{ backgroundColor: scoreColor(selectedArea.score) }}
         >
-          <span className="text-sm font-bold leading-none">{selectedArea.score.toFixed(1)}</span>
+          <span className="text-sm font-bold leading-none">{selectedArea.score.toFixed(2)}</span>
           <span className="text-[9px] font-semibold leading-none mt-0.5">{letterGrade(selectedArea.score)}</span>
         </div>
         <div className="text-xs text-gray-500">
           Safety Score
           <br />
-          <span className="text-gray-400">1 (worst) — 10 (best)</span>
+          <span className="text-gray-400">0 (safest) — 1 (highest risk)</span>
           {selectedArea.percentile != null && (
             <div className="text-xs text-gray-500 mt-1">
               Safer than {selectedArea.percentile}% of Bay Area
@@ -149,13 +149,6 @@ export default function SafetyDetailPanel() {
           )}
         </div>
       </div>
-
-      {/* Inherited data banner */}
-      {selectedArea.dataGranularity === 'inherited' && (
-        <div className="mx-3 mb-2 px-2 py-1.5 bg-amber-50 border border-amber-200 rounded text-[11px] text-amber-700">
-          City-level data — neighborhood detail not available for this city
-        </div>
-      )}
 
       {/* Category breakdown */}
       <div className="px-3 pb-2 space-y-1.5">
@@ -205,9 +198,9 @@ export default function SafetyDetailPanel() {
       {parentArea && (
         <div className="px-3 pb-2 text-[11px] text-gray-500 border-t border-gray-100 pt-2">
           <span className="font-medium text-gray-700">{parentArea.name} avg:</span>{' '}
-          {parentArea.score.toFixed(1)} vs{' '}
+          {parentArea.score.toFixed(2)} vs{' '}
           <span className="font-medium text-gray-700">This area:</span>{' '}
-          {selectedArea.score.toFixed(1)}
+          {selectedArea.score.toFixed(2)}
         </div>
       )}
 

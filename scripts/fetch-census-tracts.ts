@@ -1,8 +1,13 @@
 /**
  * Fetch Census Tract boundaries (TIGERweb) and ACS population data
- * for 7 Bay Area counties, filter to 20 target BART cities (excluding
- * SF and Oakland which already have neighborhood/beat data), and
- * populate the geo_areas table.
+ * for all 9 Bay Area counties and populate the geo_areas table.
+ *
+ * Every land tract is written to public/census-tracts.geojson so the
+ * map can render choropleth polygons across the entire region. Tracts
+ * whose centroid falls inside SF or Oakland are still excluded from
+ * the city-level tract->city join (those regions use neighborhood/beat
+ * data instead), but the polygons themselves are still emitted so the
+ * map covers the whole Bay Area.
  */
 
 import { readFileSync, writeFileSync } from 'fs';
@@ -28,20 +33,28 @@ try {
   // .env.local not found — rely on environment variables
 }
 
-// County FIPS codes for 7 Bay Area counties
-const COUNTY_FIPS = ['001', '013', '041', '043', '075', '081', '085'];
-// Alameda=001, Contra Costa=013, Marin=041, Solano=043,
-// San Francisco=075, San Mateo=081, Santa Clara=085
+// County FIPS codes for all 9 Bay Area counties
+const COUNTY_FIPS = ['001', '013', '041', '055', '075', '081', '085', '095', '097'];
+// Alameda=001, Contra Costa=013, Marin=041, Napa=055, San Francisco=075,
+// San Mateo=081, Santa Clara=085, Solano=095, Sonoma=097
 
-// 20 target BART cities (excludes SF and Oakland which have finer-grained data)
-const TARGET_CITIES = new Set([
-  'Antioch', 'Berkeley', 'Concord', 'Daly City', 'Dublin',
-  'El Cerrito', 'Fremont', 'Hayward', 'Lafayette', 'Milpitas',
-  'Orinda', 'Pittsburg', 'Pleasant Hill', 'Richmond', 'San Bruno',
-  'San Jose', 'San Leandro', 'South San Francisco', 'Union City',
-  'Walnut Creek',
-]);
+// Map county FIPS -> geo_areas county id, used as fallback parent when a
+// tract centroid does not land inside any known city polygon.
+const COUNTY_PARENT_ID: Record<string, string> = {
+  '001': 'county:alameda',
+  '013': 'county:contra_costa',
+  '041': 'county:marin',
+  '055': 'county:napa',
+  '075': 'county:san_francisco',
+  '081': 'county:san_mateo',
+  '085': 'county:santa_clara',
+  '095': 'county:solano',
+  '097': 'county:sonoma',
+};
 
+// Cities whose tracts should not be joined onto city rows (they use
+// finer-grained neighborhood/beat data). Polygons are still emitted
+// to the GeoJSON so the map has full coverage.
 const EXCLUDE_CITIES = new Set(['San Francisco', 'Oakland']);
 
 function toSlug(name: string): string {
@@ -180,20 +193,40 @@ async function main() {
   const popMap = await fetchAcsPopulation();
   console.log();
 
-  // 3. Load city boundary polygons
-  console.log('--- Step 3: Load city boundaries ---');
-  const citiesPath = resolve(__dirname, '..', 'public', 'bay-area-cities.geojson');
+  // 3. Load city boundary polygons from authoritative Census TIGER Places.
+  //    Includes both incorporated cities (CLASSFP=C1) and Census Designated
+  //    Places (CLASSFP=U1/U2), so tracts inside CDPs get a place-level parent
+  //    instead of falling back to the county.
+  console.log('--- Step 3: Load city boundaries (Census TIGER Places) ---');
+  const citiesPath = resolve(__dirname, '..', 'public', 'bay-area-places-census.geojson');
   const citiesGeoJson = JSON.parse(readFileSync(citiesPath, 'utf-8'));
   const cityFeatures: any[] = citiesGeoJson.features || [];
-  console.log(`  Loaded ${cityFeatures.length} city boundaries\n`);
+  console.log(`  Loaded ${cityFeatures.length} Census Place boundaries\n`);
 
-  // 4. For each tract, determine parent city via centroid point-in-polygon
+  // 4. For each tract, determine parent city via centroid point-in-polygon.
+  //    Fallback to the county name when a tract lies outside all known city
+  //    polygons (common for unincorporated land in Napa, Sonoma, Marin).
+  //    SF and Oakland tracts keep `parentCity` so they still render as
+  //    polygons, but they are tagged so the downstream tract->city
+  //    population join can skip them.
   console.log('--- Step 4: Assign tracts to cities ---');
   const filteredTracts: TractFeature[] = [];
   let waterOnly = 0;
   let noCity = 0;
   let excludedSfOak = 0;
-  let notTargetCity = 0;
+
+  // Friendly county name lookup for the fallback parentCity value.
+  const COUNTY_DISPLAY_NAME: Record<string, string> = {
+    '001': 'Alameda County',
+    '013': 'Contra Costa County',
+    '041': 'Marin County',
+    '055': 'Napa County',
+    '075': 'San Francisco County',
+    '081': 'San Mateo County',
+    '085': 'Santa Clara County',
+    '095': 'Solano County',
+    '097': 'Sonoma County',
+  };
 
   for (const feature of allTractFeatures) {
     const props = feature.properties || {};
@@ -223,26 +256,18 @@ async function main() {
       }
     }
 
-    if (!parentCity) {
-      noCity++;
-      continue;
-    }
-
-    // Exclude SF and Oakland
-    if (EXCLUDE_CITIES.has(parentCity)) {
-      excludedSfOak++;
-      continue;
-    }
-
-    // Keep only target cities
-    if (!TARGET_CITIES.has(parentCity)) {
-      notTargetCity++;
-      continue;
-    }
-
     const geoid = props.GEOID || props.geoid || '';
     const name = props.NAME || props.name || `Tract ${geoid}`;
     const county = props.COUNTY || props.county || '';
+
+    if (!parentCity) {
+      parentCity = COUNTY_DISPLAY_NAME[county] ?? 'Bay Area';
+      noCity++;
+    } else if (EXCLUDE_CITIES.has(parentCity)) {
+      // SF and Oakland tracts are still emitted (so polygons render),
+      // but the tract->city population join below skips them.
+      excludedSfOak++;
+    }
 
     filteredTracts.push({
       type: 'Feature',
@@ -261,10 +286,9 @@ async function main() {
   }
 
   console.log(`  Water-only tracts skipped: ${waterOnly}`);
-  console.log(`  No city match: ${noCity}`);
-  console.log(`  Excluded (SF/Oakland): ${excludedSfOak}`);
-  console.log(`  Not target city: ${notTargetCity}`);
-  console.log(`  Filtered tracts kept: ${filteredTracts.length}\n`);
+  console.log(`  No city match (assigned to county): ${noCity}`);
+  console.log(`  SF/Oakland tracts emitted (join skipped): ${excludedSfOak}`);
+  console.log(`  Tracts kept: ${filteredTracts.length}\n`);
 
   // Count per city
   const cityCount = new Map<string, number>();
@@ -290,15 +314,30 @@ async function main() {
   const sizeMB = (Buffer.byteLength(json) / 1024 / 1024).toFixed(2);
   console.log(`  Saved to ${outPath} (${sizeMB} MB, ${filteredTracts.length} tracts)\n`);
 
-  // 6. Upsert tract records into geo_areas
+  // 6. Upsert tract records into geo_areas. Parent is the matching city
+  //    when the tract centroid falls inside a known city polygon, else
+  //    the county-level geo_area (so unincorporated / SF / Oakland tracts
+  //    still have a valid parent chain).
   console.log('--- Step 6: Upsert tracts into geo_areas ---');
   let tractUpserted = 0;
+
+  // Build a set of valid city geo_area ids so we only point at ones that
+  // actually exist; everything else falls through to the county.
+  const cityIdRows = await db.execute("SELECT id FROM geo_areas WHERE area_type = 'city'");
+  const existingCityIds = new Set(cityIdRows.rows.map((r) => r.id as string));
 
   for (const tract of filteredTracts) {
     const geoid = tract.properties.GEOID;
     const name = tract.properties.NAME;
     const parentCity = tract.properties.parentCity;
-    const parentAreaId = `city:${toSlug(parentCity)}`;
+    const county = tract.properties.COUNTY;
+    const countyParent = COUNTY_PARENT_ID[county] ?? null;
+
+    const candidateCityId = `city:${toSlug(parentCity)}`;
+    const parentAreaId = existingCityIds.has(candidateCityId)
+      ? candidateCityId
+      : countyParent;
+
     const centroid = computeCentroid(tract.geometry);
     const pop = popMap.get(geoid) ?? null;
 

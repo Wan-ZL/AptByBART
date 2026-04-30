@@ -13,9 +13,9 @@ const LINE_COLORS: Record<string, string> = {
 };
 
 function safetyBadgeColor(score: number): string {
-  if (score >= 8) return 'bg-green-100 text-green-800';
-  if (score >= 6) return 'bg-yellow-100 text-yellow-800';
-  if (score >= 4) return 'bg-orange-100 text-orange-800';
+  if (score <= 0.2) return 'bg-green-100 text-green-800';
+  if (score <= 0.4) return 'bg-yellow-100 text-yellow-800';
+  if (score <= 0.6) return 'bg-orange-100 text-orange-800';
   return 'bg-red-100 text-red-800';
 }
 
@@ -81,7 +81,7 @@ export default function StationPopup() {
             <span
               className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${safetyBadgeColor(station.safetyScore)}`}
             >
-              Safety: {station.safetyScore}/10
+              Safety: {station.safetyScore.toFixed(2)}
             </span>
           </div>
         )}

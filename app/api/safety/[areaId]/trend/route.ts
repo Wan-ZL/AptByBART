@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
+import { childLogger } from "@/lib/logger";
+
+const log = childLogger("api:safety:areaId:trend");
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ areaId: string }> }
 ) {
+  const started = Date.now();
   try {
     const { areaId } = await params;
+    log.info({ method: "GET", url: `/api/safety/${areaId}/trend` }, "request");
 
     const result = await db.execute({
       sql: `
@@ -44,6 +49,15 @@ export async function GET(
 
     const months = Array.from(monthMap.values());
 
+    log.info(
+      {
+        status: 200,
+        durationMs: Date.now() - started,
+        areaId,
+        monthCount: months.length,
+      },
+      "response"
+    );
     return NextResponse.json(
       { areaId, months },
       {
@@ -55,6 +69,10 @@ export async function GET(
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (msg.includes("no such table")) {
+      log.warn(
+        { durationMs: Date.now() - started },
+        "no such table — returning empty"
+      );
       return NextResponse.json(
         { areaId: "", months: [] },
         {
@@ -64,7 +82,10 @@ export async function GET(
         }
       );
     }
-    console.error("GET /api/safety/[areaId]/trend error:", error);
+    log.error(
+      { err: error, durationMs: Date.now() - started },
+      "handler error"
+    );
     return NextResponse.json(
       { error: "Failed to fetch trend data" },
       { status: 500 }

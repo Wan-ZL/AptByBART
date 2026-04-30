@@ -1,8 +1,14 @@
 /**
  * CA DOJ OpenJustice CSV ingester
  * Source: Crimes & Clearances with Arson (1985-2023)
- * Granularity: city
- * geo_area_id format: city:<slug> (e.g., city:san_francisco)
+ * Granularity: city + county + state
+ * geo_area_id formats:
+ *   - city:<slug>   (e.g., city:san_francisco) — BART target cities only
+ *   - county:<slug> (e.g., county:alameda)     — all 9 Bay Area counties
+ *   - state:california                         — statewide rollup
+ *
+ * County + state rows power the allocator's fallback tiers so tracts whose
+ * parent city has no measurement can still inherit a number.
  */
 
 import type { CrimeIngester, CrimeObservation, CrimeCategory } from '../../lib/crime-taxonomy';
@@ -43,8 +49,28 @@ const TARGET_CITIES = new Set(
   Object.values(STATION_CITY).map(c => c.toLowerCase())
 );
 
-function slugify(city: string): string {
-  return city.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/_+$/, '');
+// 9-county Bay Area. County names in the CSV appear as "<Name> County" (e.g. "Alameda County").
+const BAY_AREA_COUNTIES = new Set([
+  'alameda',
+  'contra costa',
+  'marin',
+  'napa',
+  'san francisco',
+  'san mateo',
+  'santa clara',
+  'solano',
+  'sonoma',
+]);
+
+function slugify(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/_+$/, '');
+}
+
+function normalizeCountyName(raw: string): string | null {
+  // CSV format: "Alameda County", "Contra Costa County", "San Francisco County".
+  // Also seen: plain "Alameda" historically. Strip "County" suffix.
+  const cleaned = raw.trim().replace(/\s+county\s*$/i, '').toLowerCase();
+  return cleaned || null;
 }
 
 function parseCSVLine(line: string): string[] {
@@ -108,6 +134,7 @@ export const caDojIngester: CrimeIngester = {
     // Parse header to find column indices
     const header = parseCSVLine(lines[0]);
     const yearIdx = header.indexOf('Year');
+    const countyIdx = header.indexOf('County');
     const ncicIdx = header.findIndex(h => h === 'NCICCode' || h === 'NCIC_Code');
     const violentIdx = header.indexOf('Violent_sum');
     const propertyIdx = header.indexOf('Property_sum');
@@ -117,9 +144,9 @@ export const caDojIngester: CrimeIngester = {
       throw new Error(`Missing expected columns. Found: ${header.slice(0, 15).join(', ')}`);
     }
 
-    const cityColIdx = ncicIdx !== -1 ? ncicIdx : header.indexOf('County');
-    if (cityColIdx === -1) {
-      throw new Error('Cannot find city/agency column (NCICCode or County)');
+    const cityColIdx = ncicIdx !== -1 ? ncicIdx : countyIdx;
+    if (cityColIdx === -1 || countyIdx === -1) {
+      throw new Error('Cannot find required columns (NCICCode/County)');
     }
 
     // Find most recent year
@@ -132,8 +159,19 @@ export const caDojIngester: CrimeIngester = {
     }
     console.log(`  Most recent year in DOJ data: ${maxYear}`);
 
-    // Aggregate by city for the most recent year
-    const cityData = new Map<string, { violent: number; property: number; vehicle: number }>();
+    // Aggregate by city (target BART cities only), by county (all 9 Bay Area counties),
+    // and statewide — all for the most recent year.
+    type Counts = { violent: number; property: number; vehicle: number };
+    const newCounts = (): Counts => ({ violent: 0, property: 0, vehicle: 0 });
+    const addCounts = (t: Counts, v: number, p: number, m: number) => {
+      t.violent += v;
+      t.property += p;
+      t.vehicle += m;
+    };
+
+    const cityData = new Map<string, Counts>();
+    const countyData = new Map<string, Counts>();
+    const stateCounts = newCounts();
 
     for (let i = 1; i < lines.length; i++) {
       if (!lines[i].trim()) continue;
@@ -141,35 +179,49 @@ export const caDojIngester: CrimeIngester = {
       const year = parseInt(cols[yearIdx], 10);
       if (year !== maxYear) continue;
 
+      const violent = parseInt(cols[violentIdx], 10) || 0;
+      const property = parseInt(cols[propertyIdx], 10) || 0;
+      const vehicle = vehicleIdx !== -1 ? (parseInt(cols[vehicleIdx], 10) || 0) : 0;
+
+      // State: every row contributes.
+      addCounts(stateCounts, violent, property, vehicle);
+
+      // County: roll up into the 9 Bay Area counties.
+      const countyRaw = cols[countyIdx];
+      const countyNorm = countyRaw ? normalizeCountyName(countyRaw) : null;
+      if (countyNorm && BAY_AREA_COUNTIES.has(countyNorm)) {
+        let c = countyData.get(countyNorm);
+        if (!c) {
+          c = newCounts();
+          countyData.set(countyNorm, c);
+        }
+        addCounts(c, violent, property, vehicle);
+      }
+
+      // City: only BART target cities (by NCIC agency name).
       const cityRaw = cols[cityColIdx];
       if (!cityRaw) continue;
       const cityLower = cityRaw.trim().toLowerCase();
       if (!TARGET_CITIES.has(cityLower)) continue;
 
-      const violent = parseInt(cols[violentIdx], 10) || 0;
-      const property = parseInt(cols[propertyIdx], 10) || 0;
-      const vehicle = vehicleIdx !== -1 ? (parseInt(cols[vehicleIdx], 10) || 0) : 0;
-
-      const existing = cityData.get(cityLower);
-      if (existing) {
-        existing.violent += violent;
-        existing.property += property;
-        existing.vehicle += vehicle;
-      } else {
-        cityData.set(cityLower, { violent, property, vehicle });
+      let existing = cityData.get(cityLower);
+      if (!existing) {
+        existing = newCounts();
+        cityData.set(cityLower, existing);
       }
+      addCounts(existing, violent, property, vehicle);
     }
 
-    console.log(`  Found data for ${cityData.size} target cities`);
+    console.log(
+      `  Found data for ${cityData.size} target cities, ${countyData.size} Bay Area counties, statewide rollup`
+    );
 
     // Convert to CrimeObservation[]
     const periodStart = `${maxYear}-01-01`;
     const periodEnd = `${maxYear}-12-31`;
     const observations: CrimeObservation[] = [];
 
-    for (const [cityLower, counts] of cityData) {
-      const geoAreaId = `city:${slugify(cityLower)}`;
-
+    const emitRow = (geoAreaId: string, counts: Counts) => {
       for (const [colName, category] of Object.entries(COLUMN_CATEGORY_MAP)) {
         const count = colName === 'Violent_sum' ? counts.violent
           : colName === 'Property_sum' ? counts.property
@@ -187,9 +239,19 @@ export const caDojIngester: CrimeIngester = {
           rawCategory: colName,
         });
       }
-    }
+    };
 
-    console.log(`  CA DOJ: ${observations.length} observations across ${cityData.size} cities`);
+    for (const [cityLower, counts] of cityData) {
+      emitRow(`city:${slugify(cityLower)}`, counts);
+    }
+    for (const [countyLower, counts] of countyData) {
+      emitRow(`county:${slugify(countyLower)}`, counts);
+    }
+    emitRow('state:california', stateCounts);
+
+    console.log(
+      `  CA DOJ: ${observations.length} observations (cities=${cityData.size}, counties=${countyData.size}, state=1)`
+    );
     return observations;
   },
 };

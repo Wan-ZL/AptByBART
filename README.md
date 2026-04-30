@@ -214,67 +214,56 @@ An interactive web app that combines BART station data, real apartment prices (s
 
 ### Crime / Safety Data
 
-| Area | Source | URL |
-|------|--------|-----|
-| San Francisco (20 stations) | DataSF Socrata API | `https://data.sfgov.org/resource/wg3w-h783.json` |
-| Oakland (8 stations) | Oakland Open Data | `https://data.oaklandca.gov/resource/ym6k-rx7a.json` |
-| Other cities (22 stations) | CA DOJ OpenJustice CSV | `https://data-openjustice.doj.ca.gov/sites/default/files/dataset/2024-07/Crimes_and_Clearances_with_Arson-1985-2023.csv` |
+See [Safety System](#safety-system) below for the full design.
 
-#### Crime Data Source Coverage by Station
+Sources ingested (all free, public):
 
-```
-TIER 1: DataSF (incident-level, geocoded, DAILY updates)
-┌───────────────────────────────────────────────────────────┐
-│  SF Stations:                                             │
-│    EMBR  MONT  POWL  CIVC  16TH  24TH                    │
-│    GLEN  BALB  DALY                                       │
-│                                                           │
-│  Vehicle break-in: ✓  (Larceny - From Vehicle)            │
-│  Coverage: ~12 stations                                   │
-│  Precision: 0.5-mile radius geocoded incidents            │
-└───────────────────────────────────────────────────────────┘
+| Area | Source |
+|------|--------|
+| San Francisco | DataSF Socrata API (`data.sfgov.org`) |
+| Oakland | Oakland Open Data (`data.oaklandca.gov`) |
+| Santa Clara County / San Jose | SCC Sheriff + SJPD |
+| Berkeley, Richmond, Alameda Sheriff, Marin | Local open-data portals |
+| Statewide fallback | CA DOJ OpenJustice CSV + FBI UCR |
 
-TIER 2: Oakland Open Data (incident-level, geocoded, IRREGULAR)
-┌───────────────────────────────────────────────────────────┐
-│  Oakland Stations:                                        │
-│    WOAK  12TH  19TH  LAKE  FTVL  COLS                    │
-│    MCAR  ROCK  ASHB  DBRK  NBRK                          │
-│                                                           │
-│  Vehicle break-in: ✓  (BURG-AUTO)                         │
-│  Coverage: ~10 stations                                   │
-│  Precision: 0.5-mile radius geocoded incidents            │
-└───────────────────────────────────────────────────────────┘
+## Safety System
 
-TIER 3: CA DOJ OpenJustice (city-level aggregates, ANNUAL)
-┌───────────────────────────────────────────────────────────┐
-│  Peninsula:                                               │
-│    COLM  SSAN  SBRN  MLBR  SFIA                          │
-│  East Bay North:                                          │
-│    PLZA  DELN  RICH  ORIN  LAFY  WCRK  PHIL              │
-│    CONC  NCON  PITT  PCTR  ANTC                           │
-│  East Bay South:                                          │
-│    BAYF  SANL  HAYW  SHAY  UCTY  FRMT  WARM              │
-│    CAST  DUBL  WDUB                                       │
-│  South Bay:                                               │
-│    MLPT  BERY                                             │
-│  Airport:                                                 │
-│    OAKL                                                   │
-│                                                           │
-│  Vehicle break-in: partial  (VehicleTheft_sum only)       │
-│  Coverage: ~28 stations                                   │
-│  Precision: city-wide averages (lower granularity)        │
-└───────────────────────────────────────────────────────────┘
+### What the map shows
+
+A single MapLibre choropleth layer covering **1,765 Bay Area census tracts** across 9 counties. Every tract has a safety score from 0 to 1:
+
+- **0 (deep blue)** → safest tracts (low crime relative to surroundings)
+- **0.5 (yellow)** → middle of the distribution
+- **1 (deep red)** → most dangerous tracts
+
+Tract polygons are clipped to land — bay and ocean water is removed so polygons never extend into water.
+
+### How scores are computed
+
+Scores come from an **equal-weight ensemble** of every crime data source that covers a given tract. Each source contributes its own view of a tract's relative risk; the final score averages those views.
+
+1. **Allocate crimes to tracts.** Each source reports at a native granularity (tract, beat, city, county, or state). All sources are converted to tract-level counts via population-weighted allocation (`tract_pop / coverage_pop × coverage_crimes`).
+2. **Empirical-Bayes shrinkage.** A per-source prior (`α = 1000`) pulls low-population tracts toward the source's mean rate, so tiny tracts don't get volatile rates.
+3. **Per-source percentile rank.** Within each source's coverage area, tracts are percentile-ranked from 0 (safest) to 1 (most dangerous). A tract not covered by a source contributes nothing to that source's ranking.
+4. **Equal-weight mean.** For each tract, the final score is the simple average of its percentile ranks across the sources that cover it.
+
+**Why equal weight:**
+- Data-richness ≠ crime-richness — a tract covered by many sources doesn't look more dangerous just because more sources report on it.
+- Data-sparseness doesn't artificially make a place look safer.
+- Multi-scale blending is intentional — e.g., an Oakland Hills tract gets CA DOJ's "Oakland city rate" (moderate) AND Oakland Open Data's "hills beat rate" (low), averaging to a moderate score that reflects both "lives in Oakland" and "is in the safer part of Oakland".
+
+### Population source
+
+US Census ACS 5-year estimates (2018-2022). 100% tract coverage (1,765/1,765). Also used to weight allocation for beats, neighborhoods, cities, counties, and state.
+
+### Re-running ingest
+
+```bash
+npm run ingest:crime           # Pull latest data from all sources
+npm run db:migrate             # Apply any schema changes first if needed
 ```
 
-**Safety Score Formula:**
-
-```
-safety_score = 10 - (violent × 3 + property × 1 + vehicle × 1.5) / normalizer
-```
-
-- Vehicle crime weighted higher (relevant for car owners near BART)
-- SF vehicle break-in data filtered by: `incident_subcategory = 'Larceny - From Vehicle'`
-- Score range: 1 (least safe) to 10 (safest)
+Full technical design — including SQL allocation formulas, the tract-clipping script, and per-source quirks — lives in [CLAUDE.md](CLAUDE.md#safety-system).
 
 ## Database Schema
 

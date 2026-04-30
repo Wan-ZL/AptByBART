@@ -23,9 +23,9 @@ function resetStore() {
       pool: false,
       petFriendly: false,
       maxCommuteMin: 60,
-      minSafetyScore: 1,
+      maxRiskScore: 1,
     },
-    viewport: { latitude: 37.7749, longitude: -122.2194, zoom: 10 },
+    viewport: { latitude: 37.5693, longitude: -121.8268, zoom: 9.5 },
   });
 }
 
@@ -188,17 +188,17 @@ describe('URL sync logic', () => {
     });
   });
 
-  describe('initStoreFromUrl — safety param', () => {
-    it('parses safety value', () => {
-      setUrlSearch('?safety=7');
+  describe('initStoreFromUrl — risk param', () => {
+    it('parses risk value', () => {
+      setUrlSearch('?risk=0.3');
       renderHook(() => useUrlSync());
-      expect(useAppStore.getState().filters.minSafetyScore).toBe(7);
+      expect(useAppStore.getState().filters.maxRiskScore).toBe(0.3);
     });
 
-    it('ignores invalid safety value', () => {
-      setUrlSearch('?safety=abc');
+    it('ignores invalid risk value', () => {
+      setUrlSearch('?risk=abc');
       renderHook(() => useUrlSync());
-      expect(useAppStore.getState().filters.minSafetyScore).toBe(1);
+      expect(useAppStore.getState().filters.maxRiskScore).toBe(1);
     });
   });
 
@@ -224,7 +224,7 @@ describe('URL sync logic', () => {
       renderHook(() => useUrlSync());
       const { viewport } = useAppStore.getState();
       // Should remain default since both lat AND lng are required
-      expect(viewport.latitude).toBeCloseTo(37.7749);
+      expect(viewport.latitude).toBeCloseTo(37.5693);
     });
   });
 
@@ -389,28 +389,28 @@ describe('URL sync logic', () => {
       expect(lastUrl).not.toContain('commute');
     });
 
-    it('writes safety when above 1', () => {
+    it('writes risk when below 1', () => {
       setUrlSearch('');
       renderHook(() => useUrlSync());
 
       act(() => {
-        useAppStore.getState().setMinSafety(5);
+        useAppStore.getState().setMaxRisk(0.5);
       });
 
       const lastUrl = replaceStateSpy.mock.calls.at(-1)?.[2] as string;
-      expect(lastUrl).toContain('safety=5');
+      expect(lastUrl).toContain('risk=0.5');
     });
 
-    it('omits safety when 1 (default)', () => {
+    it('omits risk when 1 (default)', () => {
       setUrlSearch('');
       renderHook(() => useUrlSync());
 
       act(() => {
-        useAppStore.getState().setMinSafety(1);
+        useAppStore.getState().setMaxRisk(1);
       });
 
       const lastUrl = replaceStateSpy.mock.calls.at(-1)?.[2] as string;
-      expect(lastUrl).not.toContain('safety');
+      expect(lastUrl).not.toContain('risk');
     });
 
     it('writes clean pathname when all filters are default', () => {
@@ -531,7 +531,7 @@ describe('URL sync logic', () => {
       expect(filters.priceRange).toEqual([1000, 5000]);
       expect(filters.bedrooms).toEqual([]);
       expect(filters.maxCommuteMin).toBe(60);
-      expect(filters.minSafetyScore).toBe(1);
+      expect(filters.maxRiskScore).toBe(1);
     });
 
     it('handles missing commute param without error', () => {
@@ -540,10 +540,10 @@ describe('URL sync logic', () => {
       expect(useAppStore.getState().filters.maxCommuteMin).toBe(60);
     });
 
-    it('handles missing safety param without error', () => {
+    it('handles missing risk param without error', () => {
       setUrlSearch('?price_min=2000');
       renderHook(() => useUrlSync());
-      expect(useAppStore.getState().filters.minSafetyScore).toBe(1);
+      expect(useAppStore.getState().filters.maxRiskScore).toBe(1);
     });
   });
 
@@ -644,7 +644,7 @@ describe('URL sync logic', () => {
 
       // Change only latitude
       act(() => {
-        useAppStore.getState().setViewport({ latitude: 38.0, longitude: -122.2194, zoom: 10 });
+        useAppStore.getState().setViewport({ latitude: 38.0, longitude: -121.8268, zoom: 9.5 });
       });
 
       act(() => {
@@ -667,7 +667,7 @@ describe('URL sync logic', () => {
       });
 
       act(() => {
-        useAppStore.getState().setViewport({ latitude: 37.7749, longitude: -121.0, zoom: 10 });
+        useAppStore.getState().setViewport({ latitude: 37.5693, longitude: -121.0, zoom: 9.5 });
       });
 
       act(() => {
@@ -690,7 +690,7 @@ describe('URL sync logic', () => {
       });
 
       act(() => {
-        useAppStore.getState().setViewport({ latitude: 37.7749, longitude: -122.2194, zoom: 15 });
+        useAppStore.getState().setViewport({ latitude: 37.5693, longitude: -121.8268, zoom: 15 });
       });
 
       act(() => {

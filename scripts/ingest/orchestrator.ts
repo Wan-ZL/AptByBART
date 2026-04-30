@@ -6,14 +6,22 @@
 import { db } from '../../db/client';
 import type { CrimeIngester, CrimeObservation, CrimeCategory } from '../../lib/crime-taxonomy';
 import { DEFAULT_WEIGHTS } from '../../lib/crime-taxonomy';
-import { computeSafetyScores, type AreaCrimeCounts } from '../../lib/safety-scoring';
+import {
+  computeSafetyScores,
+  computeTractEnsembleScores,
+  type AreaCrimeCounts,
+} from '../../lib/safety-scoring';
 import { STATION_CITY } from './ca-doj';
+import { runAllocator } from './allocate';
+import { childLogger } from '../../lib/logger';
+
+const log = childLogger('ingest:orchestrator');
 
 export async function runIngestion(ingesters: CrimeIngester[]): Promise<void> {
   const allObservations: CrimeObservation[] = [];
 
   // --- Step 1: Register data sources ---
-  console.log('--- Registering data sources ---');
+  log.info({ sourceCount: ingesters.length }, 'registering data sources');
   for (const ing of ingesters) {
     await db.execute({
       sql: `INSERT OR IGNORE INTO crime_data_sources (id, name, api_type, granularity, update_frequency, status)
@@ -24,13 +32,20 @@ export async function runIngestion(ingesters: CrimeIngester[]): Promise<void> {
 
   // --- Step 2: Run each ingester ---
   for (const ing of ingesters) {
-    console.log(`\n--- Running ${ing.sourceName} (${ing.sourceId}) ---`);
+    log.info({ sourceId: ing.sourceId, sourceName: ing.sourceName }, 'ingester start');
     const startMs = Date.now();
 
     try {
       const observations = await ing.fetch();
-      const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
-      console.log(`  Completed in ${elapsed}s — ${observations.length} observations`);
+      const durationMs = Date.now() - startMs;
+      log.info(
+        {
+          sourceId: ing.sourceId,
+          durationMs,
+          rowCount: observations.length,
+        },
+        'ingester success'
+      );
 
       allObservations.push(...observations);
 
@@ -42,8 +57,11 @@ export async function runIngestion(ingesters: CrimeIngester[]): Promise<void> {
         args: [observations.length, ing.sourceId],
       });
     } catch (err) {
-      const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
-      console.error(`  FAILED after ${elapsed}s: ${(err as Error).message}`);
+      const durationMs = Date.now() - startMs;
+      log.error(
+        { sourceId: ing.sourceId, durationMs, err },
+        'ingester failed'
+      );
 
       await db.execute({
         sql: `UPDATE crime_data_sources SET last_fetched_at = datetime('now') WHERE id = ?`,
@@ -53,29 +71,110 @@ export async function runIngestion(ingesters: CrimeIngester[]): Promise<void> {
   }
 
   if (allObservations.length === 0) {
-    console.log('\nNo observations collected. Skipping DB write.');
+    log.warn('no observations collected — skipping DB write');
     return;
   }
 
   // --- Step 3: Ensure geo_areas exist ---
-  console.log(`\n--- Ensuring geo_areas for ${allObservations.length} observations ---`);
+  // Sub-city areas (beats, neighborhoods) need an explicit parent city since the
+  // geo_area_id alone ("beat:25X", "neighborhood:mission") carries no location
+  // hierarchy. Root-level areas (city/county/state) derive their parent from the
+  // id prefix: city→county(source-specific), county→state:california, state→NULL.
+  const SOURCE_DEFAULT_PARENT: Record<string, string | null> = {
+    oakland: 'city:oakland',
+    datasf: 'city:san_francisco',
+    santa_clara: null,
+    marin: null,
+    ca_doj: null,
+    fbi: null,
+    sjpd: 'city:san_jose',
+    berkeley: 'city:berkeley',
+    alameda_sheriff: 'county:alameda',
+    sunnyvale: 'city:sunnyvale',
+    palo_alto: 'city:palo_alto',
+    richmond: 'city:richmond',
+    mountain_view: 'city:mountain_view',
+    fremont: 'city:fremont',
+    hayward: 'city:hayward',
+    'walnut-creek': 'city:walnut_creek',
+    concord: 'city:concord',
+  };
+
+  // Cities → county mapping for parent resolution. Used only when auto-creating
+  // a geo_area that the hierarchy-fixer seed hasn't already inserted.
+  const CITY_COUNTY: Record<string, string> = {
+    // San Francisco County
+    san_francisco: 'county:san_francisco',
+    // Alameda County
+    oakland: 'county:alameda', berkeley: 'county:alameda', alameda: 'county:alameda',
+    fremont: 'county:alameda', hayward: 'county:alameda', livermore: 'county:alameda',
+    pleasanton: 'county:alameda', san_leandro: 'county:alameda', dublin: 'county:alameda',
+    union_city: 'county:alameda', emeryville: 'county:alameda', newark: 'county:alameda',
+    albany: 'county:alameda', piedmont: 'county:alameda',
+    // Contra Costa County
+    concord: 'county:contra_costa', richmond: 'county:contra_costa',
+    walnut_creek: 'county:contra_costa', antioch: 'county:contra_costa',
+    pittsburg: 'county:contra_costa', pleasant_hill: 'county:contra_costa',
+    orinda: 'county:contra_costa', lafayette: 'county:contra_costa',
+    el_cerrito: 'county:contra_costa',
+    // San Mateo County
+    daly_city: 'county:san_mateo', south_san_francisco: 'county:san_mateo',
+    san_bruno: 'county:san_mateo', millbrae: 'county:san_mateo',
+    redwood_city: 'county:san_mateo', san_mateo: 'county:san_mateo',
+    east_palo_alto: 'county:san_mateo',
+    // Santa Clara County
+    san_jose: 'county:santa_clara', palo_alto: 'county:santa_clara',
+    mountain_view: 'county:santa_clara', santa_clara: 'county:santa_clara',
+    sunnyvale: 'county:santa_clara', milpitas: 'county:santa_clara',
+    cupertino: 'county:santa_clara',
+    // Marin County
+    san_rafael: 'county:marin',
+    // Napa County
+    napa: 'county:napa',
+    // Solano County
+    fairfield: 'county:solano', vallejo: 'county:solano',
+  };
+
+  function derivedParent(areaId: string, sourceId: string): string | null {
+    const [areaType, ...rest] = areaId.split(':');
+    const slug = rest.join(':');
+    if (areaType === 'state') return null;
+    if (areaType === 'county') return 'state:california';
+    if (areaType === 'city') {
+      return CITY_COUNTY[slug] ?? null;
+    }
+    // Sub-city (tract, neighborhood, beat): use source-specific default.
+    if (sourceId in SOURCE_DEFAULT_PARENT) return SOURCE_DEFAULT_PARENT[sourceId];
+    return null;
+  }
+
+  log.info({ observationCount: allObservations.length }, 'ensuring geo_areas');
+  const areaToSource = new Map<string, string>();
+  for (const o of allObservations) {
+    if (!areaToSource.has(o.geoAreaId)) areaToSource.set(o.geoAreaId, o.sourceId);
+  }
   const uniqueAreas = new Set(allObservations.map(o => o.geoAreaId));
   const geoAreaStmts = [...uniqueAreas].map(areaId => {
     const [areaType, ...rest] = areaId.split(':');
     const slug = rest.join(':');
     const name = slug.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const sourceId = areaToSource.get(areaId)!;
+    const parentAreaId = derivedParent(areaId, sourceId);
+    if (parentAreaId === null && areaType !== 'state') {
+      log.warn({ areaId, sourceId }, 'no derivable parent — creating with NULL parent');
+    }
     return {
-      sql: `INSERT OR IGNORE INTO geo_areas (id, name, area_type) VALUES (?, ?, ?)`,
-      args: [areaId, name, areaType],
+      sql: `INSERT OR IGNORE INTO geo_areas (id, name, area_type, parent_area_id) VALUES (?, ?, ?, ?)`,
+      args: [areaId, name, areaType, parentAreaId],
     };
   });
   if (geoAreaStmts.length > 0) {
     await db.batch(geoAreaStmts, 'write');
-    console.log(`  Ensured ${geoAreaStmts.length} geo_areas`);
+    log.info({ count: geoAreaStmts.length }, 'ensured geo_areas');
   }
 
   // --- Step 4: Bulk insert observations ---
-  console.log('\n--- Writing crime_observations ---');
+  log.info('writing crime_observations');
   // Batch in chunks to avoid SQLite limits
   const CHUNK_SIZE = 200;
   let written = 0;
@@ -90,10 +189,15 @@ export async function runIngestion(ingesters: CrimeIngester[]): Promise<void> {
     await db.batch(stmts, 'write');
     written += chunk.length;
   }
-  console.log(`  Wrote ${written} observations`);
+  log.info({ written }, 'wrote crime_observations');
+
+  // --- Step 4b: Equal-weight ensemble allocation ---
+  // Allocator emits one crime_observations row per (tract, source, category, period) for
+  // every source's coverage; no synthetic 'allocated_*' sources are written anymore.
+  await runAllocator(db);
 
   // --- Step 5: Aggregate and compute safety scores ---
-  console.log('\n--- Computing safety scores ---');
+  log.info('computing safety scores');
   const areaCountsMap = new Map<string, AreaCrimeCounts>();
 
   // Fetch population data for all geo_areas
@@ -102,12 +206,28 @@ export async function runIngestion(ingesters: CrimeIngester[]): Promise<void> {
   for (const row of popResult.rows) {
     populationMap.set(row.id as string, row.population as number);
   }
-  console.log(`  Loaded population data for ${populationMap.size} geo_areas`);
+  log.info({ populatedAreas: populationMap.size }, 'loaded population data');
 
-  // Build per-source area counts for per-source percentile normalization
+  const obsAllRes = await db.execute(
+    `SELECT source_id, geo_area_id, category, incident_count
+     FROM crime_observations`
+  );
+  type DbObs = {
+    sourceId: string;
+    geoAreaId: string;
+    category: CrimeCategory;
+    incidentCount: number;
+  };
+  const allObsDb: DbObs[] = obsAllRes.rows.map(r => ({
+    sourceId: r.source_id as string,
+    geoAreaId: r.geo_area_id as string,
+    category: r.category as CrimeCategory,
+    incidentCount: Number(r.incident_count ?? 0),
+  }));
+
   const perSourceData = new Map<string, Map<string, AreaCrimeCounts>>();
 
-  for (const obs of allObservations) {
+  for (const obs of allObsDb) {
     // Aggregate totals (for DB storage and backward compat)
     let counts = areaCountsMap.get(obs.geoAreaId);
     if (!counts) {
@@ -153,21 +273,65 @@ export async function runIngestion(ingesters: CrimeIngester[]): Promise<void> {
     }
   }
 
-  console.log(`  Built per-source data for ${perSourceData.size} sources`);
+  log.info({ sources: perSourceData.size }, 'built per-source data');
+
+  // --- Tract ensemble path ---
+  // Per CLAUDE.md "Safety System": every tract covered by any source gets an
+  // equal-weight ensemble score ∈ [0,1] (0=safest, 1=most dangerous). We strip
+  // non-tract areas from per-source data and hand only tracts to the ensemble
+  // scorer. Tracts are then overlaid onto the legacy score map below.
+  const areaTypeRes = await db.execute(
+    `SELECT id, area_type FROM geo_areas`
+  );
+  const areaTypeMap = new Map<string, string>();
+  for (const row of areaTypeRes.rows) {
+    areaTypeMap.set(row.id as string, row.area_type as string);
+  }
+
+  const perSourceTractData = new Map<string, Map<string, AreaCrimeCounts>>();
+  for (const [sourceId, sourceMap] of perSourceData) {
+    const tractsOnly = new Map<string, AreaCrimeCounts>();
+    for (const [areaId, counts] of sourceMap) {
+      if (areaTypeMap.get(areaId) === 'tract') tractsOnly.set(areaId, counts);
+    }
+    if (tractsOnly.size > 0) perSourceTractData.set(sourceId, tractsOnly);
+  }
+
+  const tractScores = computeTractEnsembleScores(perSourceTractData, DEFAULT_WEIGHTS);
+  log.info(
+    { tractSources: perSourceTractData.size, tractsScored: tractScores.size },
+    'tract ensemble'
+  );
+
+  // Legacy path (non-tract areas): preserves 1-10 scale for backward compat.
   const scores = computeSafetyScores(areaCountsMap, DEFAULT_WEIGHTS, perSourceData);
 
-  // Upsert into safety_scores
-  const scoreStmts = [...scores.entries()].map(([areaId, { score, percentile }]) => {
-    const counts = areaCountsMap.get(areaId)!;
+  // Overlay ensemble results onto scores map for tract area_ids only.
+  // Shape: { score: number ∈ [0,1], percentile: null, confidence: sourceCount }.
+  for (const [tractId, { score, confidence }] of tractScores) {
+    scores.set(tractId, { score, percentile: null, confidence });
+  }
+
+  // Upsert into safety_scores — skip areas with null score (no data).
+  // safety_scores.score is NOT NULL; areas without data are simply absent from the table.
+  const scoreStmts: Array<{ sql: string; args: any[] }> = [];
+  let skippedNoData = 0;
+  for (const [areaId, { score, percentile, confidence }] of scores) {
+    if (score === null) {
+      skippedNoData++;
+      continue;
+    }
+    const counts = areaCountsMap.get(areaId) ?? { violent: 0, property: 0, vehicle: 0, qualityOfLife: 0 };
     const total = counts.violent + counts.property + counts.vehicle + counts.qualityOfLife;
-    // Collect which sources contributed to this area
     const sources = [...new Set(
-      allObservations.filter(o => o.geoAreaId === areaId).map(o => o.sourceId)
+      allObsDb.filter(o => o.geoAreaId === areaId).map(o => o.sourceId)
     )].join(',');
 
-    return {
-      sql: `INSERT INTO safety_scores (geo_area_id, score, violent_count, property_count, vehicle_count, quality_of_life_count, total_incidents, sources_used, percentile_rank, computed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    const effectiveConfidence = confidence ?? null;
+
+    scoreStmts.push({
+      sql: `INSERT INTO safety_scores (geo_area_id, score, violent_count, property_count, vehicle_count, quality_of_life_count, total_incidents, sources_used, percentile_rank, confidence, computed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(geo_area_id) DO UPDATE SET
               score = excluded.score,
               violent_count = excluded.violent_count,
@@ -177,91 +341,77 @@ export async function runIngestion(ingesters: CrimeIngester[]): Promise<void> {
               total_incidents = excluded.total_incidents,
               sources_used = excluded.sources_used,
               percentile_rank = excluded.percentile_rank,
+              confidence = excluded.confidence,
               computed_at = excluded.computed_at`,
-      args: [areaId, score, counts.violent, counts.property, counts.vehicle, counts.qualityOfLife, total, sources, percentile],
-    };
-  });
+      args: [areaId, score, counts.violent, counts.property, counts.vehicle, counts.qualityOfLife, total, sources, percentile, effectiveConfidence],
+    });
+  }
 
   for (let i = 0; i < scoreStmts.length; i += CHUNK_SIZE) {
     await db.batch(scoreStmts.slice(i, i + CHUNK_SIZE), 'write');
   }
-  console.log(`  Computed ${scores.size} safety scores`);
+  log.info({ scored: scoreStmts.length, skippedNoData }, 'computed safety scores');
 
-  // --- Step 5b: Inherit city scores to census tracts ---
-  console.log('\n--- Inheriting city scores to census tracts ---');
+  // Remove stale safety_scores rows for areas not scored in this run.
+  const scoredAreaIds = scoreStmts.map(s => s.args[0] as string);
+  const DELETE_CHUNK = 500;
+  let deletedStale = 0;
+  if (scoredAreaIds.length === 0) {
+    const res = await db.execute(`DELETE FROM safety_scores`);
+    deletedStale = Number(res.rowsAffected ?? 0);
+  } else {
+    await db.execute('CREATE TEMP TABLE IF NOT EXISTS _scored_ids (id TEXT PRIMARY KEY)');
+    await db.execute('DELETE FROM _scored_ids');
+    for (let i = 0; i < scoredAreaIds.length; i += DELETE_CHUNK) {
+      const chunk = scoredAreaIds.slice(i, i + DELETE_CHUNK);
+      const stmts = chunk.map(id => ({
+        sql: `INSERT OR IGNORE INTO _scored_ids (id) VALUES (?)`,
+        args: [id],
+      }));
+      await db.batch(stmts, 'write');
+    }
+    const res = await db.execute(
+      `DELETE FROM safety_scores WHERE geo_area_id NOT IN (SELECT id FROM _scored_ids)`
+    );
+    deletedStale = Number(res.rowsAffected ?? 0);
+    await db.execute('DROP TABLE _scored_ids');
+  }
+  log.info({ deletedStale }, 'deleted stale safety_scores rows');
+
+  // --- Step 5b: Report tract coverage ---
   const tractAreas = await db.execute(
-    `SELECT id, parent_area_id FROM geo_areas WHERE area_type = 'tract'`
+    `SELECT id FROM geo_areas WHERE area_type = 'tract'`
   );
-  let tractCount = 0;
-  for (const tract of tractAreas.rows) {
-    const tractId = tract.id as string;
-    const parentId = tract.parent_area_id as string;
-    if (!parentId) continue;
-
-    const parentScore = scores.get(parentId);
-    const parentCounts = areaCountsMap.get(parentId);
-    if (parentScore && parentCounts) {
-      scores.set(tractId, { ...parentScore });
-      areaCountsMap.set(tractId, { ...parentCounts });
-      tractCount++;
+  let tractsScored = 0;
+  let tractsUnscored = 0;
+  for (const row of tractAreas.rows) {
+    const id = row.id as string;
+    if (!scores.has(id) || scores.get(id)!.score === null) {
+      tractsUnscored++;
+    } else {
+      tractsScored++;
     }
   }
-  console.log(`  Inherited scores to ${tractCount} census tracts`);
-
-  // Write tract scores to DB
-  if (tractCount > 0) {
-    const tractStmts = [...tractAreas.rows]
-      .filter(tract => {
-        const tractId = tract.id as string;
-        return scores.has(tractId);
-      })
-      .map(tract => {
-        const tractId = tract.id as string;
-        const parentId = tract.parent_area_id as string;
-        const { score, percentile } = scores.get(tractId)!;
-        const counts = areaCountsMap.get(tractId)!;
-        const total = counts.violent + counts.property + counts.vehicle + counts.qualityOfLife;
-        const parentSources = [...new Set(
-          allObservations.filter(o => o.geoAreaId === parentId).map(o => o.sourceId)
-        )].join(',');
-
-        return {
-          sql: `INSERT INTO safety_scores (geo_area_id, score, violent_count, property_count, vehicle_count, quality_of_life_count, total_incidents, sources_used, percentile_rank, computed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-                ON CONFLICT(geo_area_id) DO UPDATE SET
-                  score = excluded.score,
-                  violent_count = excluded.violent_count,
-                  property_count = excluded.property_count,
-                  vehicle_count = excluded.vehicle_count,
-                  quality_of_life_count = excluded.quality_of_life_count,
-                  total_incidents = excluded.total_incidents,
-                  sources_used = excluded.sources_used,
-                  percentile_rank = excluded.percentile_rank,
-                  computed_at = excluded.computed_at`,
-          args: [tractId, score, counts.violent, counts.property, counts.vehicle, counts.qualityOfLife, total, parentSources, percentile],
-        };
-      });
-
-    for (let i = 0; i < tractStmts.length; i += CHUNK_SIZE) {
-      await db.batch(tractStmts.slice(i, i + CHUNK_SIZE), 'write');
-    }
-    console.log(`  Wrote ${tractStmts.length} tract safety scores to DB`);
-  }
+  log.info({ tractsScored, tractsUnscored }, 'tract coverage');
 
   // --- Step 6: Legacy crime_stats backfill ---
-  console.log('\n--- Backfilling legacy crime_stats ---');
+  log.info('backfilling legacy crime_stats');
   await backfillLegacyCrimeStats(areaCountsMap, scores);
 
   // --- Summary ---
-  console.log('\n=== Ingestion Summary ===');
-  console.log(`  Total observations: ${allObservations.length}`);
-  console.log(`  Unique geo areas:   ${uniqueAreas.size}`);
-  console.log(`  Safety scores:      ${scores.size}`);
+  log.info(
+    {
+      observations: allObsDb.length,
+      uniqueGeoAreas: uniqueAreas.size,
+      safetyScores: scores.size,
+    },
+    'ingestion summary'
+  );
 }
 
 async function backfillLegacyCrimeStats(
   areaCountsMap: Map<string, AreaCrimeCounts>,
-  scores: Map<string, { score: number; percentile: number }>
+  scores: Map<string, { score: number | null; percentile: number | null }>
 ): Promise<void> {
   // Map station_id → city:slug, then look up counts + score
   const now = new Date();
@@ -282,7 +432,10 @@ async function backfillLegacyCrimeStats(
     if (!counts) continue;
 
     const total = counts.violent + counts.property + counts.vehicle + counts.qualityOfLife;
-    const scoreVal = score?.score ?? 5.0;
+    // safety_score is on the unified 0-1 scale (0 = safest, 1 = most dangerous).
+    // Fallback 0.5 = neutral midpoint, used only when the city has crime counts
+    // but no computed ensemble score (e.g. no_population).
+    const scoreVal = score?.score ?? 0.5;
 
     stmts.push({
       sql: `INSERT INTO crime_stats
@@ -301,8 +454,8 @@ async function backfillLegacyCrimeStats(
 
   if (stmts.length > 0) {
     await db.batch(stmts, 'write');
-    console.log(`  Backfilled ${stmts.length} legacy crime_stats records`);
+    log.info({ count: stmts.length }, 'backfilled legacy crime_stats');
   } else {
-    console.log('  No city-level data to backfill into crime_stats');
+    log.info('no city-level data to backfill into crime_stats');
   }
 }

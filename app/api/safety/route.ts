@@ -4,8 +4,16 @@ import { computeSafetyScores } from "@/lib/safety-scoring";
 import type { AreaCrimeCounts } from "@/lib/safety-scoring";
 import type { SafetyWeights } from "@/lib/crime-taxonomy";
 import { DEFAULT_WEIGHTS } from "@/lib/crime-taxonomy";
+import { childLogger } from "@/lib/logger";
+
+const log = childLogger("api:safety");
 
 export async function GET(req: NextRequest) {
+  const started = Date.now();
+  log.info(
+    { method: req.method, url: req.nextUrl.pathname + req.nextUrl.search },
+    "request"
+  );
   try {
     const { searchParams } = req.nextUrl;
     const weightsParam = searchParams.get("weights");
@@ -72,7 +80,7 @@ export async function GET(req: NextRequest) {
       sourcesByArea.get(areaId)!.push(sourceId);
     }
 
-    let scoresByArea: Map<string, { score: number; percentile: number }> | null = null;
+    let scoresByArea: Map<string, { score: number | null; percentile: number | null; confidence: number; reason?: string }> | null = null;
 
     if (customWeights) {
       // Recompute scores with custom weights using per-source normalization
@@ -130,12 +138,22 @@ export async function GET(req: NextRequest) {
     const areas = result.rows.map((row) => {
       const geoAreaId = row.geo_area_id as string;
       const customResult = customWeights ? scoresByArea!.get(geoAreaId) : null;
-      const score = customResult
-        ? customResult.score
-        : ((row.score as number) ?? 5);
-      const percentileRank = customResult
-        ? customResult.percentile
-        : ((row.percentile_rank as number) ?? null);
+
+      let score: number | null;
+      let percentileRank: number | null;
+      let confidence: number | null = null;
+      let reason: string | null = null;
+
+      if (customResult) {
+        score = customResult.score;
+        percentileRank = customResult.percentile;
+        confidence = customResult.confidence ?? 0;
+        reason = customResult.reason ?? (score === null ? 'no_data' : null);
+      } else {
+        score = row.score as number;
+        percentileRank = (row.percentile_rank as number) ?? null;
+        confidence = (row.confidence as number) ?? null;
+      }
 
       if (row.updated_at) {
         const rowDate = row.updated_at as string;
@@ -149,8 +167,10 @@ export async function GET(req: NextRequest) {
         name: row.name as string,
         type: row.area_type as string,
         parentId: (row.parent_area_id as string) || null,
-        score: Math.round(score * 10) / 10,
+        score: score === null ? null : Math.round(score * 10) / 10,
         percentileRank,
+        confidence,
+        reason,
         counts: {
           violent: (row.violent_count as number) || 0,
           property: (row.property_count as number) || 0,
@@ -164,13 +184,21 @@ export async function GET(req: NextRequest) {
                         ((row.vehicle_count as number) || 0) + ((row.quality_of_life_count as number) || 0);
           return pop > 0 ? Math.round((total / pop) * 10000 * 10) / 10 : null;
         })(),
-        dataGranularity: (row.area_type as string) === 'tract' ? 'inherited' : 'direct',
         sources: sourcesByArea.get(geoAreaId) || [],
         centroidLat: (row.centroid_lat as number) || 0,
         centroidLng: (row.centroid_lng as number) || 0,
       };
     });
 
+    log.info(
+      {
+        status: 200,
+        durationMs: Date.now() - started,
+        areaCount: areas.length,
+        customWeights,
+      },
+      "response"
+    );
     return NextResponse.json(
       { areas, weights, lastUpdated },
       {
@@ -180,9 +208,12 @@ export async function GET(req: NextRequest) {
       }
     );
   } catch (error) {
-    // Handle case where tables don't exist yet
     const msg = error instanceof Error ? error.message : String(error);
     if (msg.includes("no such table")) {
+      log.warn(
+        { durationMs: Date.now() - started },
+        "no such table — returning empty"
+      );
       return NextResponse.json(
         { areas: [], weights: DEFAULT_WEIGHTS, lastUpdated: new Date().toISOString() },
         {
@@ -192,7 +223,10 @@ export async function GET(req: NextRequest) {
         }
       );
     }
-    console.error("GET /api/safety error:", error);
+    log.error(
+      { err: error, durationMs: Date.now() - started },
+      "handler error"
+    );
     return NextResponse.json(
       { error: "Failed to fetch safety data" },
       { status: 500 }

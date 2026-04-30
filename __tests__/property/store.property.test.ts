@@ -39,7 +39,7 @@ function makeStation(overrides: Partial<BartStation> = {}): BartStation {
     travelTimeMin: 10,
     fareCents: 200,
     monthlyCommuteCost: 80,
-    safetyScore: 7,
+    safetyScore: 0.3,
     ...overrides,
   };
 }
@@ -64,12 +64,12 @@ describe('Store property-based tests', () => {
         pool: false,
         petFriendly: false,
         maxCommuteMin: 60,
-        minSafetyScore: 1,
+        maxRiskScore: 1,
       },
       selectedApartmentId: null,
       selectedStationId: null,
-      safetyOverlayVisible: false,
-      viewport: { latitude: 37.7749, longitude: -122.2194, zoom: 10 },
+      safetyOverlayVisible: true,
+      viewport: { latitude: 37.5693, longitude: -121.8268, zoom: 9.5 },
     });
   });
 
@@ -125,8 +125,8 @@ describe('Store property-based tests', () => {
         fc.boolean(),
         fc.boolean(),
         fc.integer({ min: 10, max: 60 }),
-        fc.integer({ min: 1, max: 10 }),
-        (priceA, priceB, bedrooms, wd, gym, pet, commute, safety) => {
+        fc.double({ min: 0, max: 1, noNaN: true }),
+        (priceA, priceB, bedrooms, wd, gym, pet, commute, risk) => {
           const store = useAppStore.getState();
           store.setPriceRange([Math.min(priceA, priceB), Math.max(priceA, priceB)]);
           for (const b of bedrooms) store.toggleBedroom(b);
@@ -134,7 +134,7 @@ describe('Store property-based tests', () => {
           if (gym) store.toggleAmenity('gym');
           if (pet) store.toggleAmenity('petFriendly');
           store.setMaxCommute(commute);
-          store.setMinSafety(safety);
+          store.setMaxRisk(risk);
 
           // Reset
           useAppStore.getState().resetFilters();
@@ -149,19 +149,19 @@ describe('Store property-based tests', () => {
           expect(filters.pool).toBe(false);
           expect(filters.petFriendly).toBe(false);
           expect(filters.maxCommuteMin).toBe(60);
-          expect(filters.minSafetyScore).toBe(1);
+          expect(filters.maxRiskScore).toBe(1);
         }
       ),
       { numRuns: 50 }
     );
   });
 
-  it('safety filter with any value 1-10 never crashes', () => {
+  it('risk filter with any value 0-1 never crashes', () => {
     fc.assert(
       fc.property(
-        fc.integer({ min: 1, max: 10 }),
-        (safety) => {
-          useAppStore.getState().setMinSafety(safety);
+        fc.double({ min: 0, max: 1, noNaN: true }),
+        (risk) => {
+          useAppStore.getState().setMaxRisk(risk);
           const result = selectFilteredApartments(useAppStore.getState());
           expect(Array.isArray(result)).toBe(true);
         }

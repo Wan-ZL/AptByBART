@@ -87,7 +87,7 @@ export interface Filters {
   pool: boolean;
   petFriendly: boolean;
   maxCommuteMin: number; // max minutes, 60 = no limit
-  minSafetyScore: number; // 1-10, 1 = no filter
+  maxRiskScore: number; // 0-1, 1 = no filter (allow all risk)
 }
 
 export interface SafetyArea {
@@ -108,5 +108,4 @@ export interface SafetyArea {
   percentile?: number;  // 0-100, "safer than X% of Bay Area"
   population: number | null;
   perCapitaRate: number | null;
-  dataGranularity: 'direct' | 'inherited';
 }

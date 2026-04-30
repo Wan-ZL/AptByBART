@@ -13,8 +13,47 @@ const DEFAULT_FILTERS: Filters = {
   pool: false,
   petFriendly: false,
   maxCommuteMin: 60,
-  minSafetyScore: 1,
+  maxRiskScore: 1,
 };
+
+// Client-side rerank for preset weights. Backend produces ensemble scores on the
+// 0-1 percentile scale via /api/safety (0 = safest, 1 = most dangerous); for
+// non-balanced presets we re-rank tracts locally using weighted per-capita rate
+// so the UI can respond without a refetch. Non-tract areas pass through.
+function recomputeSafetyAreaScores(
+  safetyAreas: SafetyArea[],
+  weights: SafetyWeights
+): SafetyArea[] {
+  const tracts = safetyAreas.filter((a) => a.type === 'tract');
+
+  const withWeighted = tracts.map((area) => {
+    const pop = area.population || 0;
+    const weighted = pop > 0
+      ? (area.counts.violent * weights.violent
+        + area.counts.property * weights.property
+        + area.counts.vehicle * weights.vehicle
+        + area.counts.qualityOfLife * weights.qualityOfLife) / pop * 10000
+      : 0;
+    return { area, weighted, hasPop: pop > 0 };
+  });
+
+  const rankMap = new Map<string, number>();
+  const ranked = withWeighted.filter((e) => e.hasPop).sort((a, b) => a.weighted - b.weighted);
+  const n = ranked.length;
+  for (let i = 0; i < n; i++) {
+    const pos = n > 1 ? i / (n - 1) : 0;
+    rankMap.set(ranked[i].area.id, Math.round(pos * 1000) / 1000);
+  }
+
+  return safetyAreas.map((area) => {
+    if (area.type !== 'tract') return area;
+    const pop = area.population || 0;
+    return {
+      ...area,
+      score: pop > 0 ? (rankMap.get(area.id) ?? area.score) : area.score,
+    };
+  });
+}
 
 function computeFilteredApartments(
   apartments: Apartment[],
@@ -50,9 +89,9 @@ function computeFilteredApartments(
       }
     }
 
-    if (filters.minSafetyScore > 1 && apt.nearestStationId) {
+    if (filters.maxRiskScore < 1 && apt.nearestStationId) {
       const station = stationMap.get(apt.nearestStationId);
-      if (station?.safetyScore != null && station.safetyScore < filters.minSafetyScore) {
+      if (station?.safetyScore != null && station.safetyScore > filters.maxRiskScore) {
         return false;
       }
     }
@@ -103,7 +142,7 @@ interface AppState {
     key: "inUnitWd" | "dishwasher" | "parking" | "gym" | "pool" | "petFriendly"
   ) => void;
   setMaxCommute: (minutes: number) => void;
-  setMinSafety: (score: number) => void;
+  setMaxRisk: (score: number) => void;
   resetFilters: () => void;
 
   // Actions — safety v2
@@ -145,8 +184,8 @@ export const useAppStore = create<AppState>()((set) => ({
 
   // Map
   mapStyle: 'https://tiles.openfreemap.org/styles/positron',
-  safetyOverlayVisible: false,
-  viewport: { latitude: 37.7749, longitude: -122.2194, zoom: 10 },
+  safetyOverlayVisible: true,
+  viewport: { latitude: 37.5693, longitude: -121.8268, zoom: 9.5 },
 
   // Actions — data
   setStations: (stations) =>
@@ -203,9 +242,9 @@ export const useAppStore = create<AppState>()((set) => ({
       return { filters, filteredApartments: computeFilteredApartments(state.apartments, filters, state.stations) };
     }),
 
-  setMinSafety: (score) =>
+  setMaxRisk: (score) =>
     set((state) => {
-      const filters = { ...state.filters, minSafetyScore: score };
+      const filters = { ...state.filters, maxRiskScore: score };
       return { filters, filteredApartments: computeFilteredApartments(state.apartments, filters, state.stations) };
     }),
 
@@ -217,84 +256,20 @@ export const useAppStore = create<AppState>()((set) => ({
 
   // Actions — safety v2
   setSafetyWeights: (weights) =>
-    set((state) => {
-      const areas = state.safetyAreas.map((area) => {
-        const pop = area.population || 0;
-        const rate = pop > 0 ? {
-          violent: (area.counts.violent / pop) * 10000,
-          property: (area.counts.property / pop) * 10000,
-          vehicle: (area.counts.vehicle / pop) * 10000,
-          qualityOfLife: (area.counts.qualityOfLife / pop) * 10000,
-        } : { violent: 0, property: 0, vehicle: 0, qualityOfLife: 0 };
-
-        const w =
-          rate.violent * weights.violent +
-          rate.property * weights.property +
-          rate.vehicle * weights.vehicle +
-          rate.qualityOfLife * weights.qualityOfLife;
-        return { ...area, _weighted: w };
-      });
-      // Percentile-based scoring: rank by weighted value
-      const withWeights = areas.filter(a => a.population && a.population > 0);
-      const sorted = [...withWeights].sort((a, b) => a._weighted - b._weighted);
-      const n = sorted.length;
-      const rankMap = new Map<string, number>();
-      for (let i = 0; i < n; i++) {
-        const pos = n > 1 ? i / (n - 1) : 0;
-        rankMap.set(sorted[i].id, Math.round((10 - pos * 9) * 10) / 10);
-      }
-      const recomputed = areas.map(({ _weighted, ...area }) => ({
-        ...area,
-        score: (!area.population || area.population === 0)
-          ? 5.0
-          : (rankMap.get(area.id) ?? 5.0),
-      }));
-      return {
-        safetyWeights: weights,
-        safetyPreset: 'custom' as SafetyPreset,
-        safetyAreas: recomputed,
-      };
-    }),
+    set((state) => ({
+      safetyWeights: weights,
+      safetyPreset: 'custom' as SafetyPreset,
+      safetyAreas: recomputeSafetyAreaScores(state.safetyAreas, weights),
+    })),
 
   setSafetyPreset: (preset) =>
     set((state) => {
       if (preset === 'custom') return { safetyPreset: preset };
       const weights = WEIGHT_PRESETS[preset];
-      const areas = state.safetyAreas.map((area) => {
-        const pop = area.population || 0;
-        const rate = pop > 0 ? {
-          violent: (area.counts.violent / pop) * 10000,
-          property: (area.counts.property / pop) * 10000,
-          vehicle: (area.counts.vehicle / pop) * 10000,
-          qualityOfLife: (area.counts.qualityOfLife / pop) * 10000,
-        } : { violent: 0, property: 0, vehicle: 0, qualityOfLife: 0 };
-
-        const w =
-          rate.violent * weights.violent +
-          rate.property * weights.property +
-          rate.vehicle * weights.vehicle +
-          rate.qualityOfLife * weights.qualityOfLife;
-        return { ...area, _weighted: w };
-      });
-      // Percentile-based scoring: rank by weighted value
-      const withWeights = areas.filter(a => a.population && a.population > 0);
-      const sorted = [...withWeights].sort((a, b) => a._weighted - b._weighted);
-      const n = sorted.length;
-      const rankMap = new Map<string, number>();
-      for (let i = 0; i < n; i++) {
-        const pos = n > 1 ? i / (n - 1) : 0;
-        rankMap.set(sorted[i].id, Math.round((10 - pos * 9) * 10) / 10);
-      }
-      const recomputed = areas.map(({ _weighted, ...area }) => ({
-        ...area,
-        score: (!area.population || area.population === 0)
-          ? 5.0
-          : (rankMap.get(area.id) ?? 5.0),
-      }));
       return {
         safetyPreset: preset,
         safetyWeights: weights,
-        safetyAreas: recomputed,
+        safetyAreas: recomputeSafetyAreaScores(state.safetyAreas, weights),
       };
     }),
 

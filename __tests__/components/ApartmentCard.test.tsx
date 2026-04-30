@@ -43,13 +43,13 @@ describe('ApartmentCard', () => {
           travelTimeMin: 0,
           fareCents: 0,
           monthlyCommuteCost: 0,
-          safetyScore: 8,
+          safetyScore: 0.15,
         },
       ],
       apartments: [],
       selectedApartmentId: null,
       selectedStationId: null,
-      viewport: { latitude: 37.7749, longitude: -122.2194, zoom: 10 },
+      viewport: { latitude: 37.5693, longitude: -121.8268, zoom: 9.5 },
     });
   });
 
@@ -92,7 +92,7 @@ describe('ApartmentCard', () => {
 
   it('renders safety score badge', () => {
     render(<ApartmentCard apartment={makeApartment()} />);
-    expect(screen.getByText('8/10')).toBeInTheDocument();
+    expect(screen.getByText('0.15')).toBeInTheDocument();
   });
 
   it('selects apartment and pans map on click', () => {

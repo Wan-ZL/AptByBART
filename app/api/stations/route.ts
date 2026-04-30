@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
+import { childLogger } from "@/lib/logger";
+
+const log = childLogger("api:stations");
 
 export async function GET() {
+  const started = Date.now();
+  log.info({ method: "GET", url: "/api/stations" }, "request");
   try {
     const result = await db.execute(`
       SELECT
@@ -72,6 +77,15 @@ export async function GET() {
       };
     });
 
+    log.info(
+      {
+        status: 200,
+        durationMs: Date.now() - started,
+        stationCount: stations.length,
+        cityCount: citySafety.length,
+      },
+      "response"
+    );
     return NextResponse.json(
       { stations, citySafety },
       {
@@ -82,7 +96,10 @@ export async function GET() {
       }
     );
   } catch (error) {
-    console.error("GET /api/stations error:", error);
+    log.error(
+      { err: error, durationMs: Date.now() - started },
+      "handler error"
+    );
     return NextResponse.json(
       { error: "Failed to fetch stations" },
       { status: 500 }

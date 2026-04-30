@@ -68,6 +68,7 @@ const SAMPLE_SAFETY_ROW = {
   parent_area_id: 'sf',
   centroid_lat: 37.76,
   centroid_lng: -122.42,
+  population: 50000,
 };
 
 const SAMPLE_SAFETY_ROW_2 = {
@@ -84,6 +85,7 @@ const SAMPLE_SAFETY_ROW_2 = {
   parent_area_id: 'sf',
   centroid_lat: 37.79,
   centroid_lng: -122.40,
+  population: 20000,
 };
 
 const SAMPLE_CITY_ROW = {
@@ -100,6 +102,7 @@ const SAMPLE_CITY_ROW = {
   parent_area_id: null,
   centroid_lat: 37.77,
   centroid_lng: -122.42,
+  population: 800000,
 };
 
 const SAMPLE_SOURCES = [
@@ -127,23 +130,21 @@ describe('GET /api/safety', () => {
     expect(typeof data.lastUpdated).toBe('string');
 
     const area = data.areas[0];
-    expect(area).toEqual({
-      id: 'sf-mission',
-      name: 'Mission',
-      type: 'neighborhood',
-      parentId: 'sf',
-      score: 6.5,
-      percentileRank: 45,
-      counts: {
-        violent: 120,
-        property: 300,
-        vehicle: 80,
-        qualityOfLife: 50,
-      },
-      sources: ['datasf', 'ca_doj'],
-      centroidLat: 37.76,
-      centroidLng: -122.42,
+    expect(area.id).toBe('sf-mission');
+    expect(area.name).toBe('Mission');
+    expect(area.type).toBe('neighborhood');
+    expect(area.parentId).toBe('sf');
+    expect(area.score).toBe(6.5);
+    expect(area.percentileRank).toBe(45);
+    expect(area.counts).toEqual({
+      violent: 120,
+      property: 300,
+      vehicle: 80,
+      qualityOfLife: 50,
     });
+    expect(area.sources).toEqual(['datasf', 'ca_doj']);
+    expect(area.centroidLat).toBe(37.76);
+    expect(area.centroidLng).toBe(-122.42);
   });
 
   it('scores are numbers, not strings', async () => {
@@ -215,7 +216,13 @@ describe('GET /api/safety', () => {
   it('recomputes scores with custom weights param', async () => {
     vi.mocked(db.execute)
       .mockResolvedValueOnce(makeDbResult([SAMPLE_SAFETY_ROW, SAMPLE_SAFETY_ROW_2]))
-      .mockResolvedValueOnce(makeDbResult(SAMPLE_SOURCES));
+      .mockResolvedValueOnce(makeDbResult(SAMPLE_SOURCES))
+      .mockResolvedValueOnce(makeDbResult([
+        { source_id: 'datasf', geo_area_id: 'sf-mission', category: 'violent', total: 120 },
+        { source_id: 'datasf', geo_area_id: 'sf-mission', category: 'property', total: 300 },
+        { source_id: 'datasf', geo_area_id: 'sf-downtown', category: 'violent', total: 250 },
+        { source_id: 'datasf', geo_area_id: 'sf-downtown', category: 'property', total: 500 },
+      ]));
 
     const response = await GET(makeRequest('weights=5,1,0.5,0.5'));
     const data = await response.json();
@@ -228,11 +235,12 @@ describe('GET /api/safety', () => {
       qualityOfLife: 0.5,
     });
 
-    // With custom weights emphasizing violent crime, scores should differ from DB values
-    // The area with more violent crime (downtown: 250) should score lower than mission (120)
+    // With custom weights emphasizing violent crime, scores should differ from DB values.
+    // Under the 0-1 danger scale (0=safest, 1=most dangerous), the area with more
+    // violent crime (downtown) should have a HIGHER score than mission.
     const missionArea = data.areas.find((a: { id: string }) => a.id === 'sf-mission');
     const downtownArea = data.areas.find((a: { id: string }) => a.id === 'sf-downtown');
-    expect(missionArea.score).toBeGreaterThan(downtownArea.score);
+    expect(missionArea.score).toBeLessThan(downtownArea.score);
 
     // Scores should be different from DB scores since weights are custom
     expect(typeof missionArea.score).toBe('number');
@@ -331,17 +339,16 @@ describe('GET /api/safety', () => {
     expect(data.areas[0].parentId).toBeNull();
   });
 
-  it('uses default score of 5 when DB score is null', async () => {
-    const rowWithNullScore = { ...SAMPLE_SAFETY_ROW, score: null, percentile_rank: null };
+  it('passes through DB score as-is (safety_scores.score is NOT NULL)', async () => {
     vi.mocked(db.execute)
-      .mockResolvedValueOnce(makeDbResult([rowWithNullScore]))
+      .mockResolvedValueOnce(makeDbResult([SAMPLE_SAFETY_ROW]))
       .mockResolvedValueOnce(makeDbResult([]));
 
     const response = await GET(makeRequest());
     const data = await response.json();
 
-    expect(data.areas[0].score).toBe(5);
-    expect(data.areas[0].percentileRank).toBeNull();
+    expect(data.areas[0].score).toBe(6.5);
+    expect(data.areas[0].percentileRank).toBe(45);
   });
 
   it('ignores invalid weights param and uses defaults', async () => {

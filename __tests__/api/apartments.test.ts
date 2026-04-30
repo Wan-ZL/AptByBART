@@ -436,7 +436,7 @@ describe('GET /api/apartments', () => {
     await GET(request);
 
     const countCall = vi.mocked(db.execute).mock.calls[0][0] as { sql: string; args: (string | number)[] };
-    expect(countCall.sql).toContain('latest_crime.safety_score >= ?');
+    expect(countCall.sql).toContain('ss.score >= ?');
     expect(countCall.args).toContain(5);
   });
 
@@ -458,7 +458,8 @@ describe('GET /api/apartments', () => {
     await GET(request);
 
     const countCall = vi.mocked(db.execute).mock.calls[0][0] as { sql: string; args: (string | number)[] };
-    expect(countCall.sql).not.toContain('safety_score');
+    // The WHERE clause should not filter on safety score when min_safety is absent
+    expect(countCall.sql).not.toContain('ss.score >=');
   });
 
   it('adds maxCommute condition with correct SQL', async () => {

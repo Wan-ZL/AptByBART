@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
+import { childLogger } from "@/lib/logger";
+
+const log = childLogger("api:stations:id:crime");
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const started = Date.now();
   try {
     const { id } = await params;
+    log.info({ method: "GET", url: `/api/stations/${id}/crime` }, "request");
 
     const result = await db.execute({
       sql: `
@@ -36,6 +41,15 @@ export async function GET(
       safetyScore: row.safety_score,
     }));
 
+    log.info(
+      {
+        status: 200,
+        durationMs: Date.now() - started,
+        id,
+        monthCount: months.length,
+      },
+      "response"
+    );
     return NextResponse.json(
       { stationId: id, months },
       {
@@ -46,7 +60,10 @@ export async function GET(
       }
     );
   } catch (error) {
-    console.error("GET /api/stations/[id]/crime error:", error);
+    log.error(
+      { err: error, durationMs: Date.now() - started },
+      "handler error"
+    );
     return NextResponse.json(
       { error: "Failed to fetch crime stats" },
       { status: 500 }

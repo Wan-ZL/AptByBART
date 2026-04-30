@@ -38,10 +38,10 @@ function initStoreFromUrl() {
     if (!isNaN(val)) store.setMaxCommute(val);
   }
 
-  const safety = params.get('safety');
-  if (safety) {
-    const val = parseInt(safety, 10);
-    if (!isNaN(val)) store.setMinSafety(val);
+  const risk = params.get('risk');
+  if (risk) {
+    const val = parseFloat(risk);
+    if (!isNaN(val)) store.setMaxRisk(val);
   }
 
   // Safety weights
@@ -93,7 +93,7 @@ function writeFiltersToUrl(filters: Filters) {
   if (filters.pool) params.set('pool', '1');
   if (filters.petFriendly) params.set('pet', '1');
   if (filters.maxCommuteMin < 60) params.set('commute', String(filters.maxCommuteMin));
-  if (filters.minSafetyScore > 1) params.set('safety', String(filters.minSafetyScore));
+  if (filters.maxRiskScore < 1) params.set('risk', String(filters.maxRiskScore));
 
   const { safetyPreset, safetyWeights } = useAppStore.getState();
   if (safetyPreset !== 'balanced') {
@@ -107,7 +107,7 @@ function writeFiltersToUrl(filters: Filters) {
   }
 
   const viewport = useAppStore.getState().viewport;
-  if (viewport.latitude !== 37.7749 || viewport.longitude !== -122.2194 || viewport.zoom !== 10) {
+  if (viewport.latitude !== 37.5693 || viewport.longitude !== -121.8268 || viewport.zoom !== 9.5) {
     params.set('lat', viewport.latitude.toFixed(4));
     params.set('lng', viewport.longitude.toFixed(4));
     params.set('zoom', viewport.zoom.toFixed(1));

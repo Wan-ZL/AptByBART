@@ -150,12 +150,12 @@ describe('Type interfaces', () => {
       pool: false,
       petFriendly: false,
       maxCommuteMin: 60,
-      minSafetyScore: 1,
+      maxRiskScore: 1,
     };
     expect(filters.priceRange).toEqual([1000, 5000]);
     expect(filters.bedrooms).toEqual([]);
     expect(filters.maxCommuteMin).toBe(60);
-    expect(filters.minSafetyScore).toBe(1);
+    expect(filters.maxRiskScore).toBe(1);
   });
 
   it('ApartmentDetail extends Apartment with extra fields', () => {

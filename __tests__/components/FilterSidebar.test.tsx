@@ -66,12 +66,12 @@ describe('FilterSidebar', () => {
         pool: false,
         petFriendly: false,
         maxCommuteMin: 60,
-        minSafetyScore: 1,
+        maxRiskScore: 1,
       },
       selectedApartmentId: null,
       selectedStationId: null,
-      safetyOverlayVisible: false,
-      viewport: { latitude: 37.7749, longitude: -122.2194, zoom: 10 },
+      safetyOverlayVisible: true,
+      viewport: { latitude: 37.5693, longitude: -121.8268, zoom: 9.5 },
     });
   });
 
@@ -108,9 +108,9 @@ describe('FilterSidebar', () => {
     expect(screen.getByText('Max Commute')).toBeInTheDocument();
   });
 
-  it('renders Safety Score section', () => {
+  it('renders Max Risk section', () => {
     render(<FilterSidebar />);
-    expect(screen.getByText('Safety Score')).toBeInTheDocument();
+    expect(screen.getByText('Max Risk')).toBeInTheDocument();
   });
 
   it('toggles bedroom when clicked', () => {

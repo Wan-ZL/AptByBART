@@ -80,6 +80,72 @@ Scripts manually parse `.env.local` (no dotenv dependency). They import `db` fro
 | `GOOGLE_PLACES_API_KEY` | `discover:apartments` script | Not needed for web app |
 | `ANTHROPIC_API_KEY` | T4 Claude fallback scraper | Optional, scraper skips T4 without it |
 
+## Safety System
+
+**Guiding principle:** Every Bay Area census tract gets a safety score computed from an equal-weight ensemble across all available data sources. Multi-scale coverage doesn't bias any area.
+
+### Safety Data Pipeline
+
+**Step 1 — Ingest & allocate to tract**
+
+All sources (DataSF, Oakland Open Data, CA DOJ, FBI, Santa Clara County, Marin, SJPD, Berkeley, Richmond, Alameda Sheriff, etc.) are allocated to **tract level** regardless of their native granularity:
+
+| Source granularity | Allocation method |
+|---|---|
+| Already tract-level | Direct |
+| Sub-city (beat, neighborhood) | Population-weighted spatial overlap to overlapping tracts |
+| City-level (most sources) | `tract_pop / city_pop` × city_crimes |
+| County-level | `tract_pop / county_pop` × county_crimes |
+| State-level | `tract_pop / state_pop` × state_crimes |
+
+Population data from US Census ACS 5-year (backfilled via `scripts/backfill-population.ts`).
+
+**Step 2 — Empirical-Bayes shrinkage**
+
+For each (source, tract), compute:
+```
+shrunk_rate = (crimes + α·μ_source) / (population + α)
+```
+where `α = 1000`, `μ_source` = population-weighted mean rate across all tracts within the source's coverage. This prevents small-population tracts from having volatile rates.
+
+**Step 3 — Per-source normalization (0-1)**
+
+For each source `s`, percentile-rank all tracts within that source's coverage:
+```
+norm(s, tract) = percentile_rank(shrunk_rate_s_tract, among all tracts that s covers)
+```
+Scale: **0 = safest, 1 = most dangerous**. A tract not covered by a source contributes nothing to that source's ranking.
+
+**Step 4 — Equal-weight ensemble**
+
+For each tract:
+```
+final_score(tract) = mean over s covering tract: { norm(s, tract) }
+```
+- A tract with 1 source → score = that source's rank
+- A tract with 10 sources → score = simple average of 10 ranks
+- Every source contributes equally; no source is "dropped" or "picked" as authoritative
+
+**Why this works:**
+- Data-richness ≠ crime-richness: a tract covered by many sources doesn't look more dangerous just because more sources report it
+- Data-sparseness doesn't artificially make a place safer
+- Multi-scale blended view is intentional: an Oakland Hills tract gets CA DOJ's "Oakland city rate" (moderate) AND Oakland Open Data's "hills beat rate" (low), averaging to a moderate score that reflects both "lives in Oakland" AND "is in the safer part of Oakland"
+
+### Rendering
+
+- **Single MapLibre layer** — tracts only (1,765 tract polygons across 9 Bay Area counties)
+- No beat / neighborhood overlay. Beats and neighborhoods exist in DB for allocation but don't render as separate visual layers
+- Color gradient: **0 (safest) → deep blue; 1 (most dangerous) → deep red**, with yellow in middle
+- Tract polygons are **clipped to land** — water extensions (bay, ocean) removed via `scripts/clip-tracts-to-land.ts` using turf.difference + bay/ocean polygon
+
+### Population Source
+
+- Census ACS 5-year estimates (2018-2022). 100% coverage on tracts (1,765/1,765). Also covers beats, neighborhoods, cities, counties, state.
+
+### Score Confidence
+
+- Previously shown as separate "Low confidence (allocated)" legend entry + dashed border — **REMOVED** under the equal-weight ensemble model. All tracts computed via the same normalization path.
+
 ## Scraper Pipeline
 
 ```bash

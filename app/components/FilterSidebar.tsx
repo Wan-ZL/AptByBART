@@ -52,7 +52,7 @@ export default function FilterSidebar() {
   const toggleBedroom = useAppStore((s) => s.toggleBedroom);
   const toggleAmenity = useAppStore((s) => s.toggleAmenity);
   const setMaxCommute = useAppStore((s) => s.setMaxCommute);
-  const setMinSafety = useAppStore((s) => s.setMinSafety);
+  const setMaxRisk = useAppStore((s) => s.setMaxRisk);
   const selectApartment = useAppStore((s) => s.selectApartment);
   const resetFilters = useAppStore((s) => s.resetFilters);
   const safetyOverlayVisible = useAppStore((s) => s.safetyOverlayVisible);
@@ -154,21 +154,21 @@ export default function FilterSidebar() {
           <p className="text-xs text-gray-400 mt-1">Pre-computed to Montgomery St (Financial District)</p>
         </section>
 
-        {/* Safety Score */}
+        {/* Max Risk Score */}
         <section>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-gray-700">Safety Score</span>
+            <span className="text-sm font-medium text-gray-700">Max Risk</span>
             <span className="text-xs text-gray-500">
-              {filters.minSafetyScore <= 1 ? 'No minimum' : `Min: ${filters.minSafetyScore}/10`}
+              {filters.maxRiskScore >= 1 ? 'No maximum risk' : `Max risk: ${filters.maxRiskScore.toFixed(2)}`}
             </span>
           </div>
           <Slider.Root
             className="relative flex items-center select-none touch-none w-full h-5"
-            min={1}
-            max={10}
-            step={1}
-            value={[filters.minSafetyScore]}
-            onValueChange={(val) => setMinSafety(val[0])}
+            min={0}
+            max={1}
+            step={0.05}
+            value={[filters.maxRiskScore]}
+            onValueChange={(val) => setMaxRisk(val[0])}
           >
             <SliderTrack>
               <SliderThumb />

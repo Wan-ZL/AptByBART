@@ -1,14 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db/client";
+import { childLogger } from "@/lib/logger";
+
+const log = childLogger("api:apartments:id");
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const started = Date.now();
   try {
     const { id } = await params;
+    log.info({ method: "GET", url: `/api/apartments/${id}` }, "request");
 
-    // Fetch apartment with nearest station info
+    // safety_score now comes from the apartment's spatially-resolved geo_area
+    // (see scripts/backfill-apartment-geo-areas.ts), not from the crime_stats
+    // station join that misattributed city-wide totals to each station.
     const aptResult = await db.execute({
       sql: `
         SELECT
@@ -18,16 +25,10 @@ export async function GET(
           s.travel_time_to_montgomery,
           s.fare_to_montgomery,
           s.monthly_commute_cost,
-          latest_crime.safety_score
+          ss.score as safety_score
         FROM apartments a
         LEFT JOIN bart_stations s ON s.id = a.nearest_station_id
-        LEFT JOIN crime_stats latest_crime ON latest_crime.station_id = s.id
-          AND latest_crime.id = (
-            SELECT id FROM crime_stats
-            WHERE station_id = s.id
-            ORDER BY data_year DESC, data_month DESC
-            LIMIT 1
-          )
+        LEFT JOIN safety_scores ss ON ss.geo_area_id = a.geo_area_id
         WHERE a.id = ?
       `,
       args: [id],
@@ -123,6 +124,10 @@ export async function GET(
         : null,
     };
 
+    log.info(
+      { status: 200, durationMs: Date.now() - started, id },
+      "response"
+    );
     return NextResponse.json(
       { apartment },
       {
@@ -132,7 +137,10 @@ export async function GET(
       }
     );
   } catch (error) {
-    console.error("GET /api/apartments/[id] error:", error);
+    log.error(
+      { err: error, durationMs: Date.now() - started },
+      "handler error"
+    );
     return NextResponse.json(
       { error: "Failed to fetch apartment" },
       { status: 500 }

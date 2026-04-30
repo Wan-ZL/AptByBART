@@ -34,13 +34,32 @@ export async function setupTestDb(): Promise<Client> {
         sql: `INSERT INTO bart_stations VALUES ('WCRK', 'Walnut Creek', 37.9055, -122.0675, '200 Ygnacio', 'Walnut Creek', 'CC', '["yellow"]', 35, 695, 28668)`,
         args: [],
       },
-      // Apartments
+      // Geo areas for apartment spatial safety lookup (new pipeline joins
+      // safety_scores via apartments.geo_area_id, not the legacy crime_stats path)
       {
-        sql: `INSERT INTO apartments (id, name, address, lat, lng, website_url, nearest_station_id, walk_min_to_bart, has_in_unit_wd, has_dishwasher, has_parking, parking_type, scrape_status) VALUES (1, 'Test Apt 1', '100 Main St', 37.79, -122.40, 'https://test1.com', 'EMBR', 5, 1, 1, 1, 'garage', 'active')`,
+        sql: `INSERT INTO geo_areas (id, name, area_type, parent_area_id, centroid_lat, centroid_lng, population) VALUES ('tract-sf-1', 'SF Tract 1', 'tract', NULL, 37.79, -122.40, 5000)`,
         args: [],
       },
       {
-        sql: `INSERT INTO apartments (id, name, address, lat, lng, website_url, nearest_station_id, walk_min_to_bart, has_in_unit_wd, has_dishwasher, has_parking, parking_type, scrape_status) VALUES (2, 'Test Apt 2', '200 Oak St', 37.91, -122.07, 'https://test2.com', 'WCRK', 10, 0, 1, 0, NULL, 'active')`,
+        sql: `INSERT INTO geo_areas (id, name, area_type, parent_area_id, centroid_lat, centroid_lng, population) VALUES ('tract-wc-1', 'WC Tract 1', 'tract', NULL, 37.91, -122.07, 3000)`,
+        args: [],
+      },
+      // Safety scores per tract — on 0-1 danger scale (0=safest, 1=most dangerous)
+      {
+        sql: `INSERT INTO safety_scores (geo_area_id, score, violent_count, property_count, vehicle_count, quality_of_life_count, total_incidents, percentile_rank) VALUES ('tract-sf-1', 6.5, 15, 45, 30, 0, 90, 55)`,
+        args: [],
+      },
+      {
+        sql: `INSERT INTO safety_scores (geo_area_id, score, violent_count, property_count, vehicle_count, quality_of_life_count, total_incidents, percentile_rank) VALUES ('tract-wc-1', 8.5, 3, 10, 5, 0, 18, 85)`,
+        args: [],
+      },
+      // Apartments
+      {
+        sql: `INSERT INTO apartments (id, name, address, lat, lng, website_url, nearest_station_id, walk_min_to_bart, has_in_unit_wd, has_dishwasher, has_parking, parking_type, scrape_status, geo_area_id) VALUES (1, 'Test Apt 1', '100 Main St', 37.79, -122.40, 'https://test1.com', 'EMBR', 5, 1, 1, 1, 'garage', 'active', 'tract-sf-1')`,
+        args: [],
+      },
+      {
+        sql: `INSERT INTO apartments (id, name, address, lat, lng, website_url, nearest_station_id, walk_min_to_bart, has_in_unit_wd, has_dishwasher, has_parking, parking_type, scrape_status, geo_area_id) VALUES (2, 'Test Apt 2', '200 Oak St', 37.91, -122.07, 'https://test2.com', 'WCRK', 10, 0, 1, 0, NULL, 'active', 'tract-wc-1')`,
         args: [],
       },
       // Floor plans

@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS apartments (
   scrape_status TEXT DEFAULT 'pending',   -- 'pending', 'active', 'stale', 'broken'
   last_successful_tier TEXT,              -- 'rentcafe', 'cheerio', 'playwright', 'openai', 'claude'
   last_scraped_at TEXT,
+  geo_area_id TEXT REFERENCES geo_areas(id),  -- most-granular area for spatial safety lookup
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
