@@ -2,14 +2,18 @@ import { createClient } from '@libsql/client';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
-const url = process.env.TURSO_DATABASE_URL;
-const authToken = process.env.TURSO_AUTH_TOKEN;
-const outDir = process.env.BACKUP_DIR;
-
-if (!url || !authToken || !outDir) {
-  console.error('Set TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, BACKUP_DIR');
-  process.exit(1);
+function requireEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) {
+    console.error(`Missing required env: ${name}`);
+    process.exit(1);
+  }
+  return v;
 }
+
+const url = requireEnv('TURSO_DATABASE_URL');
+const authToken = requireEnv('TURSO_AUTH_TOKEN');
+const outDir = requireEnv('BACKUP_DIR');
 
 mkdirSync(outDir, { recursive: true });
 const prod = createClient({ url, authToken });
