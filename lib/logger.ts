@@ -8,13 +8,22 @@ const LEVEL =
 
 const isDev = process.env.NODE_ENV !== 'production';
 const isNext = !!process.env.NEXT_RUNTIME || !!process.env.__NEXT_PRIVATE_ORIGIN;
+// Read-only filesystems (Vercel /var/task, AWS Lambda) — never try to write a file.
+const isServerless =
+  !!process.env.VERCEL ||
+  !!process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  !!process.env.AWS_EXECUTION_ENV;
+// Opt-in file logging for long-running scripts (cron jobs on Render etc.).
+const logFilePath = process.env.LOG_FILE
+  ? path.resolve(process.env.LOG_FILE)
+  : null;
 
-const logsDir = path.join(process.cwd(), 'logs');
-if (!isDev) {
+if (logFilePath && !isServerless) {
   try {
-    if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+    const dir = path.dirname(logFilePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   } catch {
-    // Read-only FS — fall through to stderr.
+    // fall through to stderr
   }
 }
 
@@ -43,14 +52,17 @@ function buildLogger() {
     });
   }
 
-  try {
-    return pino(
-      { level: LEVEL },
-      pino.destination({ dest: path.join(logsDir, 'app.log'), sync: false })
-    );
-  } catch {
-    return pino({ level: LEVEL });
+  if (logFilePath && !isServerless) {
+    try {
+      return pino(
+        { level: LEVEL },
+        pino.destination({ dest: logFilePath, sync: false })
+      );
+    } catch {
+      // fall through to default stderr
+    }
   }
+  return pino({ level: LEVEL });
 }
 
 export const logger = buildLogger();
